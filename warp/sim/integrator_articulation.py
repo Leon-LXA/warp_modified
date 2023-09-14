@@ -826,31 +826,31 @@ def eval_rigid_mass(
 
     wp.spatial_mass(body_I_s, joint_start, joint_count, M_offset, M)
 
-@wp.kernel
-def eval_dense_gemm(m: int, n: int, p: int, t1: int, t2: int, A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
-    wp.dense_gemm(m, n, p, t1, t2, A, B, C)
+# @wp.kernel
+# def eval_dense_gemm(m: int, n: int, p: int, t1: int, t2: int, A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
+#     wp.dense_gemm(m, n, p, t1, t2, A, B, C)
 
-@wp.kernel
-def eval_dense_gemm_batched(m: wp.array(dtype=int), n: wp.array(dtype=int), p: wp.array(dtype=int), t1: int, t2: int, A_start: wp.array(dtype=int), B_start: wp.array(dtype=int), C_start: wp.array(dtype=int), A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
-    wp.dense_gemm_batched(m, n, p, t1, t2, A_start, B_start, C_start, A, B, C)
+# @wp.kernel
+# def eval_dense_gemm_batched(m: wp.array(dtype=int), n: wp.array(dtype=int), p: wp.array(dtype=int), t1: int, t2: int, A_start: wp.array(dtype=int), B_start: wp.array(dtype=int), C_start: wp.array(dtype=int), A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
+#     wp.dense_gemm_batched(m, n, p, t1, t2, A_start, B_start, C_start, A, B, C)
 
-@wp.kernel
-def eval_dense_cholesky(n: int, A: wp.array(dtype=float), regularization: wp.array(dtype=float), L: wp.array(dtype=float)):
-    wp.dense_chol(n, A, regularization, L)
+# @wp.kernel
+# def eval_dense_cholesky(n: int, A: wp.array(dtype=float), regularization: wp.array(dtype=float), L: wp.array(dtype=float)):
+#     wp.dense_chol(n, A, regularization, L)
 
 @wp.kernel
 def eval_dense_cholesky_batched(A_start: wp.array(dtype=int), A_dim: wp.array(dtype=int), A: wp.array(dtype=float), regularization: wp.array(dtype=float), L: wp.array(dtype=float)):
     wp.dense_chol_batched(A_start, A_dim, A, regularization, L)
 
-@wp.kernel
-def eval_dense_subs(n: int, L: wp.array(dtype=float), b: wp.array(dtype=float), x: wp.array(dtype=float)):
-    wp.dense_subs(n, L, b, x)
+# @wp.kernel
+# def eval_dense_subs(n: int, L: wp.array(dtype=float), b: wp.array(dtype=float), x: wp.array(dtype=float)):
+#     wp.dense_subs(n, L, b, x)
 
-# helper that propagates gradients back to A, treating L as a constant / temporary variable
-# allows us to reuse the Cholesky decomposition from the forward pass
-@wp.kernel
-def eval_dense_solve(n: int, A: wp.array(dtype=float), L: wp.array(dtype=float), b: wp.array(dtype=float), tmp: wp.array(dtype=float), x: wp.array(dtype=float)):
-    wp.dense_solve(n, A, L, b, tmp, x)
+# # helper that propagates gradients back to A, treating L as a constant / temporary variable
+# # allows us to reuse the Cholesky decomposition from the forward pass
+# @wp.kernel
+# def eval_dense_solve(n: int, A: wp.array(dtype=float), L: wp.array(dtype=float), b: wp.array(dtype=float), tmp: wp.array(dtype=float), x: wp.array(dtype=float)):
+#     wp.dense_solve(n, A, L, b, tmp, x)
 
 # helper that propagates gradients back to A, treating L as a constant / temporary variable
 # allows us to reuse the Cholesky decomposition from the forward pass
@@ -896,12 +896,12 @@ class SemiImplicitArticulationIntegrator:
     def __init__(self):
         pass
 
-    def simulate(self, tape, model, state_in, state_out, dt, update_mass_matrix=True):
-        state_out.body_ft_s = torch.zeros((model.link_count, 6), dtype=torch.wp.vec32, device=model.adapter, requires_grad=True)
+    def simulate(self, model, state_in, state_out, dt, update_mass_matrix=True):
+        state_out.body_ft_s = torch.zeros((model.link_count, 6), dtype=float, device=model.device, requires_grad=True)
 
         # evaluate body transforms
-        tape.launch(
-            func=eval_rigid_fk,
+        wp.launch(
+            kernel=eval_rigid_fk,
             dim=model.articulation_count,
             inputs=[
                 model.articulation_joint_start,
@@ -918,12 +918,12 @@ class SemiImplicitArticulationIntegrator:
                 state_out.body_X_sc,
                 state_out.body_X_sm
             ],
-            adapter=model.adapter,
-            preserve_output=True)
+            device=model.device,
+            )
 
         # evaluate joint inertias, motion vectors, and forces
-        tape.launch(
-            func=eval_rigid_id,
+        wp.launch(
+            kernel=eval_rigid_id,
             dim=model.articulation_count,                       
             inputs=[
                 model.articulation_joint_start,
@@ -949,13 +949,13 @@ class SemiImplicitArticulationIntegrator:
                 state_out.body_f_s,
                 state_out.body_a_s,
             ],
-            adapter=model.adapter,
-            preserve_output=True)
+            device=model.device,
+            )
 
         if (model.ground and model.contact_count > 0):
             # evaluate contact forces
-            tape.launch(
-                func=eval_rigid_contacts_art,
+            wp.launch(
+                kernel=eval_rigid_contacts_art,
                 dim=model.contact_count,
                 inputs=[
                     state_out.body_X_sc,
@@ -969,12 +969,12 @@ class SemiImplicitArticulationIntegrator:
                 outputs=[
                     state_out.body_f_s
                 ],
-                adapter=model.adapter,
-                preserve_output=True)
+                device=model.device,
+                )
 
         # evaluate joint torques
-        tape.launch(
-            func=eval_rigid_tau,
+        wp.launch(
+            kernel=eval_rigid_tau,
             dim=model.articulation_count,
             inputs=[
                 model.articulation_joint_start,
@@ -1000,8 +1000,8 @@ class SemiImplicitArticulationIntegrator:
                 state_out.body_ft_s,
                 state_out.joint_tau
             ],
-            adapter=model.adapter,
-            preserve_output=True)
+            device=model.device,
+            )
 
         
         if (update_mass_matrix):
@@ -1009,8 +1009,8 @@ class SemiImplicitArticulationIntegrator:
             model.alloc_mass_matrix()
 
             # build J
-            tape.launch(
-                func=eval_rigid_jacobian,
+            wp.launch(
+                kernel=eval_rigid_jacobian,
                 dim=model.articulation_count,
                 inputs=[
                     # inputs
@@ -1023,12 +1023,12 @@ class SemiImplicitArticulationIntegrator:
                 outputs=[
                     model.J
                 ],
-                adapter=model.adapter,
-                preserve_output=True)
+                device=model.device,
+                )
 
             # build M
-            tape.launch(
-                func=eval_rigid_mass,
+            wp.launch(
+                kernel=eval_rigid_mass,
                 dim=model.articulation_count,                       
                 inputs=[
                     # inputs
@@ -1039,12 +1039,11 @@ class SemiImplicitArticulationIntegrator:
                 outputs=[
                     model.M
                 ],
-                adapter=model.adapter,
-                preserve_output=True)
+                device=model.device,
+                )
 
             # form P = M*J
             wp.matmul_batched(
-                tape,
                 model.articulation_count,
                 model.articulation_M_rows,
                 model.articulation_J_cols,
@@ -1057,11 +1056,10 @@ class SemiImplicitArticulationIntegrator:
                 model.M,
                 model.J,
                 model.P,
-                adapter=model.adapter)
+                device=model.device)
 
             # form H = J^T*P
             wp.matmul_batched(
-                tape,
                 model.articulation_count,
                 model.articulation_J_cols,
                 model.articulation_J_cols,
@@ -1074,11 +1072,11 @@ class SemiImplicitArticulationIntegrator:
                 model.J,
                 model.P,
                 model.H,
-                adapter=model.adapter)
+                device=model.device)
 
             # compute decomposition
-            tape.launch(
-                func=eval_dense_cholesky_batched,
+            wp.launch(
+                kernel=eval_dense_cholesky_batched,
                 dim=model.articulation_count,
                 inputs=[
                     model.articulation_H_start,
@@ -1089,14 +1087,14 @@ class SemiImplicitArticulationIntegrator:
                 outputs=[
                     model.L
                 ],
-                adapter=model.adapter,
-                skip_check_grad=True)
+                device=model.device,
+                )
 
         tmp = torch.zeros_like(state_out.joint_tau)
 
         # solve for qdd
-        tape.launch(
-            func=eval_dense_solve_batched,
+        wp.launch(
+            kernel=eval_dense_solve_batched,
             dim=model.articulation_count,
             inputs=[
                 model.articulation_dof_start, 
@@ -1110,12 +1108,12 @@ class SemiImplicitArticulationIntegrator:
             outputs=[
                 state_out.joint_qdd
             ],
-            adapter=model.adapter,
-            skip_check_grad=True)
+            device=model.device,
+            )
 
         # integrate joint dofs -> joint coords
-        tape.launch(
-            func=eval_rigid_integrate,
+        wp.launch(
+            kernel=eval_rigid_integrate,
             dim=model.link_count,
             inputs=[
                 model.joint_type,
@@ -1130,6 +1128,6 @@ class SemiImplicitArticulationIntegrator:
                 state_out.joint_q,
                 state_out.joint_qd
             ],
-            adapter=model.adapter)
+            device=model.device)
 
         return state_out

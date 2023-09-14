@@ -52,7 +52,7 @@ CUDA_CALLABLE inline void dense_gemm_impl(int m, int n, int p, const float* __re
 
 
 template <bool add=false>
-CUDA_CALLABLE inline void dense_gemm(int m, int n, int p, int t1, int t2, const array_t<float>& A, const array_t<float>& B, array_t<float>& C)
+CUDA_CALLABLE inline void dense_gemm(int m, int n, int p, int t1, int t2, const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C)
 {
     if (t1 == 0 && t2 == 0)
         dense_gemm_impl<false, false, add>(m, n, p, A.data, B.data, C.data);
@@ -64,76 +64,107 @@ CUDA_CALLABLE inline void dense_gemm(int m, int n, int p, int t1, int t2, const 
         dense_gemm_impl<true, true, add>(m, n, p, A.data, B.data, C.data);
 }
 
+template <bool add=false>
+CUDA_CALLABLE inline void dense_gemm_batched(
+    const int* __restrict__ m, const int* __restrict__ n, const int* __restrict__ p, int t1, int t2,
+     const int* __restrict__ A_start,  const int* __restrict__ B_start, const int* __restrict__ C_start,
+     const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C)
+{
+    // on the CPU each thread computes the whole matrix multiply
+    // on the GPU each block computes the multiply with one output per-thread
+    const int batch = tid()/kNumThreadsPerBlock;
+
+    dense_gemm<add>(m[batch], n[batch], p[batch], t1, t2, A+A_start[batch], B+B_start[batch], C+C_start[batch]);
+}
 
 
-
-void  CUDA_CALLABLE inline dense_chol(int n, const array_t<float>& A, float regularization, array_t<float>& L)
+void  CUDA_CALLABLE inline dense_chol(int n, const float* __restrict__ A, const float* __restrict__ regularization, float* __restrict__ L)
 {
     for (int j=0; j < n; ++j)
     {
-        float s = A.data[dense_index(n, j, j)] + regularization;
+        float s = A[dense_index(n, j, j)] + regularization[j];
 
         for (int k=0; k < j; ++k)
         {
-            float r = L.data[dense_index(n, j, k)];
+            float r = L[dense_index(n, j, k)];
             s -= r*r;
         }
 
         s = sqrt(s);
         const float invS = 1.0f/s;
 
-        L.data[dense_index(n, j, j)] = s;
+        L[dense_index(n, j, j)] = s;
 
         for (int i=j+1; i < n; ++i)
         {
-            s = A.data[dense_index(n, i, j)];
+            s = A[dense_index(n, i, j)];
             
             for (int k=0; k < j; ++k)
             {
-                s -= L.data[dense_index(n, i, k)]*L.data[dense_index(n, j, k)];
+                s -= L[dense_index(n, i, k)]*L[dense_index(n, j, k)];
             }
 
-            L.data[dense_index(n, i, j)] = s*invS;
+            L[dense_index(n, i, j)] = s*invS;
         }
     }
 }
 
 
+CUDA_CALLABLE inline void dense_chol_batched(const int* __restrict__ A_start, const int* __restrict__ A_dim, const float* __restrict__ A, const float* __restrict__ regularization, float* __restrict__ L)
+{
+    const int batch = tid();
+    
+    const int n = A_dim[batch];
+    const int offset = A_start[batch];
+    
+    dense_chol(n, A + offset, regularization + n*batch, L + offset);
+}
 
 
 // Solves (L*L^T)x = b given the Cholesky factor L 
-CUDA_CALLABLE inline void dense_subs(int n, const array_t<float>& L, const array_t<float>& b, array_t<float>& x)
+CUDA_CALLABLE inline void dense_subs(int n, const float* __restrict__ L, const float* __restrict__ b, float* __restrict__ x)
 {
     // forward substitution
     for (int i=0; i < n; ++i)
     {
-        float s = b.data[i];
+        float s = b[i];
 
         for (int j=0; j < i; ++j)
         {
-            s -= L.data[dense_index(n, i, j)]*x.data[j];
+            s -= L[dense_index(n, i, j)]*x[j];
         }
 
-        x.data[i] = s/L.data[dense_index(n, i, i)];
+        x[i] = s/L[dense_index(n, i, i)];
     }
 
     // backward substitution
     for (int i=n-1; i >= 0; --i)
     {
-        float s = x.data[i];
+        float s = x[i];
 
         for (int j=i+1; j < n; ++j)
         {
-            s -= L.data[dense_index(n, j, i)]*x.data[j];
+            s -= L[dense_index(n, j, i)]*x[j];
         }
 
-        x.data[i] = s/L.data[dense_index(n, i, i)];
+        x[i] = s/L[dense_index(n, i, i)];
     }
 }
 
-CUDA_CALLABLE inline void dense_solve(int n, const array_t<float>& A, const array_t<float>& L, const array_t<float>& b, array_t<float>& x)
+CUDA_CALLABLE inline void dense_solve(int n, const float* __restrict__ A, const float* __restrict__ L, const float* __restrict__ b, float* __restrict__ tmp, float* __restrict__ x)
 {
     dense_subs(n, L, b, x);
+}
+
+
+CUDA_CALLABLE inline void dense_solve_batched(
+    const int* __restrict__ b_start, const int* A_start, const int* A_dim, 
+    const float* __restrict__ A, const float* __restrict__ L, 
+    const float* __restrict__ b, float* __restrict__ tmp, float* __restrict__ x)
+{
+    const int batch = tid();
+
+    dense_solve(A_dim[batch], A + A_start[batch], L + A_start[batch], b + b_start[batch], NULL, x + b_start[batch]);
 }
 
 
@@ -156,8 +187,8 @@ CUDA_CALLABLE inline void dense_solve(int n, const array_t<float>& A, const arra
 
 // adjoint methods
 CUDA_CALLABLE inline void adj_dense_gemm(
-    int m, int n, int p, int t1, int t2, const array_t<float>& A, const array_t<float>& B, array_t<float>& C,
-    int adj_m, int adj_n, int adj_p, int adj_t1, int adj_t2, array_t<float>& adj_A, array_t<float>& adj_B, const array_t<float>& adj_C)
+    int m, int n, int p, int t1, int t2, const float* A, const float* B, float* C,
+    int adj_m, int adj_n, int adj_p, int adj_t1, int adj_t2, float* adj_A, float* adj_B, const float* adj_C)
 {
 
     // print_matrix("A", m, p, A);
@@ -177,12 +208,37 @@ CUDA_CALLABLE inline void adj_dense_gemm(
 }
 
 
+CUDA_CALLABLE inline void adj_dense_gemm_batched(
+    const int* __restrict__ m, const int* __restrict__ n, const int* __restrict__ p, int t1, int t2,
+    const int* __restrict__ A_start,  const int* __restrict__ B_start, const int* __restrict__ C_start,
+    const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C,
+    // adj
+    int* __restrict__ adj_m, int* __restrict__ adj_n, int* __restrict__ adj_p, int adj_t1, int adj_t2,
+    int* __restrict__ adj_A_start,  int* __restrict__ adj_B_start, int* __restrict__ adj_C_start,
+    float* __restrict__ adj_A, float* __restrict__ adj_B, const float* __restrict__ adj_C)
+{
+    const int batch = tid()/kNumThreadsPerBlock;
+
+    adj_dense_gemm(m[batch], n[batch], p[batch], t1, t2, A+A_start[batch], B+B_start[batch], C+C_start[batch], 
+                   0, 0, 0, 0, 0, adj_A+A_start[batch], adj_B+B_start[batch], adj_C+C_start[batch]);
+}
+
+
 CUDA_CALLABLE inline void adj_dense_chol(
     int n, const array_t<float>& A, float regularization, array_t<float>& L,
     int adj_n, const array_t<float>& adj_A, float adj_regularization, array_t<float>& adj_L)
 {
     // nop, use dense_solve to differentiate through (A^-1)b = x
 }
+
+
+CUDA_CALLABLE inline void adj_dense_chol_batched(
+    const int* __restrict__ A_start, const int* __restrict__ A_dim, const float* __restrict__ A, const float* __restrict__ regularization, float* __restrict__ L,
+    const int* __restrict__ adj_A_start, const int* __restrict__ adj_A_dim, const float* __restrict__ adj_A, const float* __restrict__ adj_regularization, float* __restrict__ adj_L)
+{
+    // nop, use dense_solve to differentiate through (A^-1)b = x
+}
+
 
 CUDA_CALLABLE inline void adj_dense_subs(
     int n, const array_t<float>& L, const array_t<float>& b, array_t<float>& x,
@@ -192,21 +248,49 @@ CUDA_CALLABLE inline void adj_dense_subs(
 }
 
 
-CUDA_CALLABLE inline void adj_dense_solve(int n,
-    const array_t<float>& A, const array_t<float>& L, const array_t<float>& b, const array_t<float>& x,
-    int adj_n, array_t<float>& adj_A, array_t<float>& adj_L, array_t<float>& adj_b, const array_t<float>& adj_x)
+CUDA_CALLABLE inline void adj_dense_solve(
+    int n, const float* __restrict__ A, const float* __restrict__ L, const float* __restrict__ b, float* __restrict__ tmp, const float* __restrict__ x,
+    int adj_n, float* __restrict__ adj_A, float* __restrict__ adj_L, float* __restrict__ adj_b, float* __restrict__ adj_tmp, const float* __restrict__ adj_x)
 {
-    // see https://people.maths.ox.ac.uk/gilesm/files/NA-08-01.pwp, section 2.3.1
-    dense_subs(n, L, adj_x, adj_b);
+    for (int i=0; i < n; ++i)
+    {
+        tmp[i] = 0.0f;
+    }
+
+    dense_subs(n, L, adj_x, tmp);
+
+    for (int i=0; i < n; ++i)
+    {
+        adj_b[i] += tmp[i];
+    }
+
+    //dense_subs(n, L, adj_x, adj_b);
 
     // A* = -adj_b*x^T
     for (int i=0; i < n; ++i)
     {
         for (int j=0; j < n; ++j)
         {
-            adj_A.data[dense_index(n, i, j)] += -adj_b.data[i]*x.data[j];
+            adj_A[dense_index(n, i, j)] += -tmp[i]*x[j];
         }
     }
+}
+
+
+CUDA_CALLABLE inline void adj_dense_solve_batched(
+    const int* __restrict__ b_start, const int* A_start, const int* A_dim, 
+    const float* __restrict__ A, const float* __restrict__ L, 
+    const float* __restrict__ b, float* __restrict__ tmp, float* __restrict__ x,
+    // adj
+    int* __restrict__ adj_b_start, int* __restrict__ adj_A_start, int* __restrict__ adj_A_dim, 
+    float* __restrict__ adj_A, float* __restrict__ adj_L, 
+    float* __restrict__ adj_b, float* __restrict__ adj_tmp, const float* __restrict__ adj_x)
+{
+    const int batch = tid();
+
+    adj_dense_solve(A_dim[batch], A + A_start[batch], L + A_start[batch], b + b_start[batch], tmp + b_start[batch], x + b_start[batch],
+                    0, adj_A + A_start[batch], adj_L + A_start[batch], adj_b + b_start[batch], tmp + b_start[batch], adj_x + b_start[batch]);
+
 }
 
 

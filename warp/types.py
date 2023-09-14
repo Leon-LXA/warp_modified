@@ -3313,7 +3313,34 @@ def adj_batched_matmul(
     if not ret:
         raise RuntimeError("adj_matmul failed.")
 
+def matmul_batched(batch_count, m, n, k, t1, t2, A_start, B_start, C_start, A, B, C, device):
+    
+    if (device == 'cpu'):
+        threads = batch_count
+    else:
+        threads = 256*batch_count   # must match the threadblock size used in adjoint.py
 
+    warp.launch(
+        kernel=warp.eval_dense_gemm_batched,
+        dim=threads,
+        inputs=[
+            m,
+            n,
+            k,
+            t1,
+            t2,
+            A_start,
+            B_start,
+            C_start,
+            A,
+            B,
+        ],
+        outputs=[
+            C
+        ],
+        device=device,
+)
+    
 class HashGrid:
     def __init__(self, dim_x, dim_y, dim_z, device=None):
         """Class representing a hash grid object for accelerated point queries.
