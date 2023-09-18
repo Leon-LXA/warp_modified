@@ -25,6 +25,7 @@ def parse_urdf(
     stiffness=100.0,
     damping=10.0,
     armature=0.0,
+    joint_armature=0.0,
     shape_ke=1.0e4,
     shape_kd=1.0e3,
     shape_kf=1.0e2,
@@ -357,6 +358,7 @@ def parse_urdf(
                 "z": [0.0, 0.0, 1.0],
             }
             builder.add_joint_d6(
+                joint_armature=joint_armature,
                 linear_axes=[wp.sim.JointAxis(axes[a]) for a in linear_axes],
                 angular_axes=[wp.sim.JointAxis(axes[a]) for a in angular_axes],
                 parent_xform=base_parent_xform,
@@ -423,6 +425,7 @@ def parse_urdf(
         if joint["type"] == "revolute" or joint["type"] == "continuous":
             builder.add_joint_revolute(
                 axis=joint["axis"],
+                joint_armature=joint_armature,
                 target_ke=stiffness,
                 target_kd=joint_damping,
                 limit_lower=lower,
@@ -435,6 +438,7 @@ def parse_urdf(
         elif joint["type"] == "prismatic":
             builder.add_joint_prismatic(
                 axis=joint["axis"],
+                joint_armature=joint_armature,
                 target_ke=stiffness,
                 target_kd=joint_damping,
                 limit_lower=lower * scale,
@@ -463,6 +467,7 @@ def parse_urdf(
             v /= np.linalg.norm(v)
 
             builder.add_joint_d6(
+                joint_armature=joint_armature,
                 linear_axes=[
                     wp.sim.JointAxis(
                         u, limit_lower=lower * scale, limit_upper=upper * scale, limit_ke=limit_ke, limit_kd=limit_kd
