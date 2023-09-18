@@ -582,6 +582,8 @@ class Model:
         self.articulation_start = None
         self.joint_name = None
 
+        self.composite_rigid_body_alg = False
+
         # todo: per-joint values?
         self.joint_attach_ke = 1.0e3
         self.joint_attach_kd = 1.0e2
@@ -633,7 +635,7 @@ class Model:
 
         s.particle_count = self.particle_count
         s.body_count = self.body_count
-
+        s.composite_rigid_body_alg = self.composite_rigid_body_alg
         # --------------------------------
         # dynamic state (input, output)
 
@@ -661,6 +663,27 @@ class Model:
             s.body_qd.requires_grad = requires_grad
             s.body_f.requires_grad = requires_grad
 
+        if self.composite_rigid_body_alg:
+            s.joint_q = wp.clone(self.joint_q)
+            s.joint_qd = wp.clone(self.joint_qd)
+
+            s.joint_q.requires_grad = requires_grad
+            s.joint_qd.requires_grad = requires_grad
+
+            # joints
+            s.joint_qdd = wp.empty_like(self.joint_qd, requires_grad=True)
+            s.joint_tau = wp.empty_like(self.joint_qd, requires_grad=True)
+            s.joint_S_s = wp.empty((self.joint_dof_count, 6), dtype=wp.float32, requires_grad=True)            
+
+            # derived rigid body data (maximal coordinates)
+            s.body_X_sc = wp.empty((self.body_count, 7), dtype=wp.float32, requires_grad=True)
+            s.body_X_sm = wp.empty((self.body_count, 7), dtype=wp.float32, requires_grad=True)
+            s.body_I_s = wp.empty((self.body_count, 6, 6), dtype=wp.float32, requires_grad=True)
+            s.body_v_s = wp.empty((self.body_count, 6), dtype=wp.float32, requires_grad=True)
+            s.body_a_s = wp.empty((self.body_count, 6), dtype=wp.float32, requires_grad=True)
+            s.body_f_s = wp.zeros((self.body_count, 6), dtype=wp.float32, requires_grad=True)
+            s.body_ft_s = wp.zeros((self.body_count, 6), dtype=wp.float32, requires_grad=True)
+
         return s
 
     def allocate_soft_contacts(self, count, requires_grad=False):
@@ -670,6 +693,18 @@ class Model:
         self.soft_contact_body_pos = wp.zeros(count, dtype=wp.vec3, device=self.device, requires_grad=requires_grad)
         self.soft_contact_body_vel = wp.zeros(count, dtype=wp.vec3, device=self.device, requires_grad=requires_grad)
         self.soft_contact_normal = wp.zeros(count, dtype=wp.vec3, device=self.device, requires_grad=requires_grad)
+
+    def alloc_mass_matrix(self):
+        if (self.body_count):
+
+            # system matrices
+            self.M = wp.zeros(self.M_size, dtype=wp.float32, requires_grad=True)
+            self.J = wp.zeros(self.J_size, dtype=wp.float32, requires_grad=True)
+            self.P = wp.empty(self.J_size, dtype=wp.float32, requires_grad=True)
+            self.H = wp.empty(self.H_size, dtype=wp.float32, requires_grad=True)
+
+            # zero since only upper triangle is set which can trigger NaN detection
+            self.L = wp.zeros(self.H_size, dtype=wp.float32,requires_grad=True)
 
     def find_shape_contact_pairs(self):
         # find potential contact pairs based on collision groups and collision mask (pairwise filtering)
@@ -957,7 +992,7 @@ class ModelBuilder:
     # Default geo settings
     default_geo_thickness = 1e-5
 
-    def __init__(self, up_vector=(0.0, 1.0, 0.0), gravity=-9.80665):
+    def __init__(self, up_vector=(0.0, 1.0, 0.0), gravity=-9.80665, composite_rigid_body_alg = False):
         self.num_envs = 0
 
         # particles
@@ -1081,6 +1116,9 @@ class ModelBuilder:
         self.joint_dof_count = 0
         self.joint_coord_count = 0
         self.joint_axis_total_count = 0
+
+        # articulations
+        self.composite_rigid_body_alg = composite_rigid_body_alg
 
         self.up_vector = np.array(up_vector)
         self.up_axis = np.argmax(np.abs(up_vector))
@@ -1370,6 +1408,7 @@ class ModelBuilder:
         joint_type: wp.constant,
         parent: int,
         child: int,
+        joint_armature: float = 0.0,
         linear_axes: List[JointAxis] = [],
         angular_axes: List[JointAxis] = [],
         name: str = None,
@@ -1477,6 +1516,7 @@ class ModelBuilder:
         for i in range(dof_count):
             self.joint_qd.append(0.0)
             self.joint_act.append(0.0)
+            self.joint_armature.append(joint_armature)
 
         if joint_type == JOINT_FREE or joint_type == JOINT_BALL:
             # ensure that a valid quaternion is used for the angular dofs
@@ -1502,6 +1542,7 @@ class ModelBuilder:
         parent_xform: wp.transform,
         child_xform: wp.transform,
         axis: Vec3,
+        joint_armature: float = 0.0,
         target: float = 0.0,
         target_ke: float = 0.0,
         target_kd: float = 0.0,
@@ -1556,6 +1597,7 @@ class ModelBuilder:
             JOINT_REVOLUTE,
             parent,
             child,
+            joint_armature=joint_armature,
             parent_xform=parent_xform,
             child_xform=child_xform,
             angular_axes=[ax],
@@ -1573,6 +1615,7 @@ class ModelBuilder:
         parent_xform: wp.transform,
         child_xform: wp.transform,
         axis: Vec3,
+        joint_armature: float = 0.0,
         target: float = 0.0,
         target_ke: float = 0.0,
         target_kd: float = 0.0,
@@ -1627,6 +1670,7 @@ class ModelBuilder:
             JOINT_PRISMATIC,
             parent,
             child,
+            joint_armature=joint_armature,
             parent_xform=parent_xform,
             child_xform=child_xform,
             linear_axes=[ax],
@@ -1641,6 +1685,7 @@ class ModelBuilder:
         self,
         parent: int,
         child: int,
+        joint_armature: float = 0.0,
         parent_xform: wp.transform = wp.transform(),
         child_xform: wp.transform = wp.transform(),
         linear_compliance: float = 0.0,
@@ -1670,6 +1715,7 @@ class ModelBuilder:
             JOINT_BALL,
             parent,
             child,
+            joint_armature=joint_armature,
             parent_xform=parent_xform,
             child_xform=child_xform,
             linear_compliance=linear_compliance,
@@ -1683,6 +1729,7 @@ class ModelBuilder:
         self,
         parent: int,
         child: int,
+        joint_armature: float = 0.0,
         parent_xform: wp.transform = wp.transform(),
         child_xform: wp.transform = wp.transform(),
         linear_compliance: float = 0.0,
@@ -1712,6 +1759,7 @@ class ModelBuilder:
             JOINT_FIXED,
             parent,
             child,
+            joint_armature=joint_armature,
             parent_xform=parent_xform,
             child_xform=child_xform,
             linear_compliance=linear_compliance,
@@ -1761,6 +1809,7 @@ class ModelBuilder:
         self,
         parent: int,
         child: int,
+        joint_armature: float = 0.0,
         parent_xform: wp.transform = wp.transform(),
         child_xform: wp.transform = wp.transform(),
         min_distance: float = -1.0,
@@ -1795,6 +1844,7 @@ class ModelBuilder:
             JOINT_DISTANCE,
             parent,
             child,
+            joint_armature=joint_armature,
             parent_xform=parent_xform,
             child_xform=child_xform,
             linear_axes=[ax],
@@ -1809,6 +1859,7 @@ class ModelBuilder:
         child: int,
         axis_0: JointAxis,
         axis_1: JointAxis,
+        joint_armature: float = 0.0,
         parent_xform: wp.transform = wp.transform(),
         child_xform: wp.transform = wp.transform(),
         linear_compliance: float = 0.0,
@@ -1840,6 +1891,7 @@ class ModelBuilder:
             JOINT_UNIVERSAL,
             parent,
             child,
+            joint_armature=joint_armature,
             angular_axes=[axis_0, axis_1],
             parent_xform=parent_xform,
             child_xform=child_xform,
@@ -1857,6 +1909,7 @@ class ModelBuilder:
         axis_0: JointAxis,
         axis_1: JointAxis,
         axis_2: JointAxis,
+        joint_armature: float = 0.0,
         parent_xform: wp.transform = wp.transform(),
         child_xform: wp.transform = wp.transform(),
         name: str = None,
@@ -1885,6 +1938,7 @@ class ModelBuilder:
             JOINT_COMPOUND,
             parent,
             child,
+            joint_armature=joint_armature,
             angular_axes=[axis_0, axis_1, axis_2],
             parent_xform=parent_xform,
             child_xform=child_xform,
@@ -1897,6 +1951,7 @@ class ModelBuilder:
         self,
         parent: int,
         child: int,
+        joint_armature: float = 0.0,
         linear_axes: List[JointAxis] = [],
         angular_axes: List[JointAxis] = [],
         name: str = None,
@@ -1930,6 +1985,7 @@ class ModelBuilder:
             JOINT_D6,
             parent,
             child,
+            joint_armature=joint_armature,
             parent_xform=parent_xform,
             child_xform=child_xform,
             linear_axes=linear_axes,
@@ -1982,7 +2038,7 @@ class ModelBuilder:
 
             data = {
                 "type": self.joint_type[i],
-                # 'armature': self.joint_armature[i],
+                'armature': self.joint_armature[i],
                 "q": self.joint_q[q_start : q_start + q_dim],
                 "qd": self.joint_qd[qd_start : qd_start + qd_dim],
                 "act": self.joint_act[qd_start : qd_start + qd_dim],
@@ -3883,8 +3939,10 @@ class ModelBuilder:
             m.joint_qd = wp.array(self.joint_qd, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_name = self.joint_name
 
+            # articulations
+            m.composite_rigid_body_alg = self.composite_rigid_body_alg
+
             # dynamics properties
-            # TODO unused joint_armature
             m.joint_armature = wp.array(self.joint_armature, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_target = wp.array(self.joint_target, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_target_ke = wp.array(self.joint_target_ke, dtype=wp.float32, requires_grad=requires_grad)
@@ -3954,5 +4012,71 @@ class ModelBuilder:
             m.gravity = np.array(self.up_vector) * self.gravity
 
             m.enable_tri_collisions = False
+
+            # articulations
+            if self.composite_rigid_body_alg:
+                # calculate total size and offsets of Jacobian and mass matrices for entire system
+                m.J_size = 0
+                m.M_size = 0
+                m.H_size = 0
+
+                articulation_J_start = []
+                articulation_M_start = []
+                articulation_H_start = []
+
+                articulation_M_rows = []
+                articulation_H_rows = []
+                articulation_J_rows = []
+                articulation_J_cols = []
+
+                articulation_dof_start = []
+                articulation_coord_start = []
+
+                for i in range(m.articulation_count):
+
+                    first_joint = self.articulation_start[i]
+                    last_joint = self.articulation_start[i+1]
+
+                    first_coord = self.joint_q_start[first_joint]
+                    last_coord = self.joint_q_start[last_joint]
+
+                    first_dof = self.joint_qd_start[first_joint]
+                    last_dof = self.joint_qd_start[last_joint]
+
+                    joint_count = last_joint-first_joint
+                    dof_count = last_dof-first_dof
+                    coord_count = last_coord-first_coord
+
+                    articulation_J_start.append(m.J_size)
+                    articulation_M_start.append(m.M_size)
+                    articulation_H_start.append(m.H_size)
+                    articulation_dof_start.append(first_dof)
+                    articulation_coord_start.append(first_coord)
+
+                    # bit of data duplication here, but will leave it as such for clarity
+                    articulation_M_rows.append(joint_count*6)
+                    articulation_H_rows.append(dof_count)
+                    articulation_J_rows.append(joint_count*6)
+                    articulation_J_cols.append(dof_count)
+
+                    m.J_size += 6*joint_count*dof_count
+                    m.M_size += 6*joint_count*6*joint_count
+                    m.H_size += dof_count*dof_count
+                    
+
+                # matrix offsets for batched gemm
+                m.articulation_J_start = wp.array(articulation_J_start, dtype=wp.int32)
+                m.articulation_M_start = wp.array(articulation_M_start, dtype=wp.int32)
+                m.articulation_H_start = wp.array(articulation_H_start, dtype=wp.int32)
+                
+                m.articulation_M_rows = wp.array(articulation_M_rows, dtype=wp.int32)
+                m.articulation_H_rows = wp.array(articulation_H_rows, dtype=wp.int32)
+                m.articulation_J_rows = wp.array(articulation_J_rows, dtype=wp.int32)
+                m.articulation_J_cols = wp.array(articulation_J_cols, dtype=wp.int32)
+
+                m.articulation_dof_start = wp.array(articulation_dof_start, dtype=wp.int32)
+                m.articulation_coord_start = wp.array(articulation_coord_start, dtype=wp.int32)
+
+                m.alloc_mass_matrix()
 
             return m

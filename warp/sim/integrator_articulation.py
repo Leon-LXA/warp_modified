@@ -12,6 +12,7 @@ models + state forward in time.
 
 import warp as wp
 import torch
+from .model import ModelShapeGeometry, ModelShapeMaterials
 
 
 # # Frank & Park definition 3.20, pg 100
@@ -68,27 +69,32 @@ def spatial_transform_inertia(t: wp.transform, I: wp.spatial_matrix):
 
 @wp.kernel
 def eval_rigid_contacts_art(
+    contact_count: wp.array(dtype=int),
     body_X_s: wp.array(dtype=wp.transform),
     body_v_s: wp.array(dtype=wp.spatial_vector),
     contact_body: wp.array(dtype=int),
     contact_point: wp.array(dtype=wp.vec3),
-    contact_dist: wp.array(dtype=float),
-    contact_mat: wp.array(dtype=int),
-    materials: wp.array(dtype=float),
+    contact_shape: wp.array(dtype=float),
+    shape_materials: ModelShapeMaterials,
+    geo: ModelShapeGeometry,
     body_f_s: wp.array(dtype=wp.spatial_vector)):
 
     tid = wp.tid()
 
+    count = contact_count[0]
+    if tid >= count:
+        return
+
     c_body = contact_body[tid]
     c_point = contact_point[tid]
-    c_dist = contact_dist[tid]
-    c_mat = contact_mat[tid]
+    c_shape = contact_shape[tid]
+    c_dist = geo.thickness[c_shape]
 
     # hard coded surface parameter tensor layout (ke, kd, kf, mu)
-    ke = materials[c_mat * 4 + 0]       # restitution coefficient
-    kd = materials[c_mat * 4 + 1]       # damping coefficient
-    kf = materials[c_mat * 4 + 2]       # friction coefficient
-    mu = materials[c_mat * 4 + 3]       # coulomb friction
+    ke = shape_materials.ke[c_shape]
+    kd = shape_materials.kd[c_shape]
+    kf = shape_materials.kf[c_shape]
+    mu = shape_materials.mu[c_shape]
 
     X_s = body_X_s[c_body]              # position of colliding body
     v_s = body_v_s[c_body]              # orientation of colliding body
@@ -897,21 +903,20 @@ class SemiImplicitArticulationIntegrator:
         pass
 
     def simulate(self, model, state_in, state_out, dt, update_mass_matrix=True):
-        state_out.body_ft_s = torch.zeros((model.link_count, 6), dtype=float, device=model.device, requires_grad=True)
-
+        
         # evaluate body transforms
         wp.launch(
             kernel=eval_rigid_fk,
             dim=model.articulation_count,
             inputs=[
-                model.articulation_joint_start,
+                model.articulation_start, # now, originally articulation_joint_start
                 model.joint_type,
                 model.joint_parent,
-                model.joint_q_start,
-                model.joint_qd_start,
+                model.joint_q, # now, originally joint_q_start
+                model.joint_qd, # now, originally joint_qd_start
                 state_in.joint_q,
-                model.joint_X_pj,
-                model.joint_X_cm,
+                model.joint_X_p, # now, originally joint_X_pj
+                model.joint_X_c, # now, originally joint_X_cm
                 model.joint_axis
             ], 
             outputs=[
@@ -924,22 +929,22 @@ class SemiImplicitArticulationIntegrator:
         # evaluate joint inertias, motion vectors, and forces
         wp.launch(
             kernel=eval_rigid_id,
-            dim=model.articulation_count,                       
+            dim=model.articulation_count,                  
             inputs=[
-                model.articulation_joint_start,
+                model.articulation_start, # now, originally articulation_joint_start
                 model.joint_type,
                 model.joint_parent,
-                model.joint_q_start,
-                model.joint_qd_start,
+                model.joint_q, # now, originally joint_q_start
+                model.joint_qd, # now, originally joint_qd_start
                 state_in.joint_q,
                 state_in.joint_qd,
                 model.joint_axis,
                 model.joint_target_ke,
                 model.joint_target_kd,
-                model.body_I_m,
+                model.body_inertia, # now, originally body_I_m
                 state_out.body_X_sc,
                 state_out.body_X_sm,
-                model.joint_X_pj,
+                model.joint_X_p, # now, originally joint_X_pj
                 model.gravity,
             ],
             outputs=[
@@ -956,15 +961,16 @@ class SemiImplicitArticulationIntegrator:
             # evaluate contact forces
             wp.launch(
                 kernel=eval_rigid_contacts_art,
-                dim=model.contact_count,
+                dim=model.rigid_contact_max,
                 inputs=[
+                    model.rigid_contact_count,
                     state_out.body_X_sc,
                     state_out.body_v_s,
-                    model.contact_body0,
-                    model.contact_point0,
-                    model.contact_dist,
-                    model.contact_material,
-                    model.shape_materials
+                    model.rigid_contact_body0, # needs to be figured out
+                    model.rigid_contact_point0,
+                    model.rigid_contact_shape0,
+                    model.shape_materials,
+                    model.shape_geo,
                 ],
                 outputs=[
                     state_out.body_f_s
@@ -977,14 +983,14 @@ class SemiImplicitArticulationIntegrator:
             kernel=eval_rigid_tau,
             dim=model.articulation_count,
             inputs=[
-                model.articulation_joint_start,
+                model.articulation_start, # now, originally articulation_joint_start
                 model.joint_type,
                 model.joint_parent,
-                model.joint_q_start,
-                model.joint_qd_start,
+                model.joint_q, # now, originally joint_q_start
+                model.joint_qd, # now, originally joint_qd_start
                 state_in.joint_q,
                 state_in.joint_qd,
-                state_in.joint_act,
+                model.joint_act,
                 model.joint_target,
                 model.joint_target_ke,
                 model.joint_target_kd,
@@ -994,7 +1000,7 @@ class SemiImplicitArticulationIntegrator:
                 model.joint_limit_kd,
                 model.joint_axis,
                 state_out.joint_S_s,
-                state_out.body_f_s
+                state_out.body_f_s 
             ],
             outputs=[
                 state_out.body_ft_s,
@@ -1014,10 +1020,10 @@ class SemiImplicitArticulationIntegrator:
                 dim=model.articulation_count,
                 inputs=[
                     # inputs
-                    model.articulation_joint_start,
+                    model.articulation_start, # now, originally articulation_joint_start
                     model.articulation_J_start,
                     model.joint_parent,
-                    model.joint_qd_start,
+                    model.joint_qd, # now, originally joint_qd_start
                     state_out.joint_S_s
                 ],
                 outputs=[
@@ -1029,10 +1035,10 @@ class SemiImplicitArticulationIntegrator:
             # build M
             wp.launch(
                 kernel=eval_rigid_mass,
-                dim=model.articulation_count,                       
+                dim=model.articulation_count,                      
                 inputs=[
                     # inputs
-                    model.articulation_joint_start,
+                    model.articulation_start, # now, originally articulation_joint_start
                     model.articulation_M_start,
                     state_out.body_I_s
                 ],
@@ -1117,8 +1123,8 @@ class SemiImplicitArticulationIntegrator:
             dim=model.link_count,
             inputs=[
                 model.joint_type,
-                model.joint_q_start,
-                model.joint_qd_start,
+                model.joint_q, # now, originally joint_q_start
+                model.joint_qd, # now, originally joint_qd_start
                 state_in.joint_q,
                 state_in.joint_qd,
                 state_out.joint_qdd,
@@ -1126,7 +1132,7 @@ class SemiImplicitArticulationIntegrator:
             ],
             outputs=[
                 state_out.joint_q,
-                state_out.joint_qd
+                state_out.joint_qd,
             ],
             device=model.device)
 
