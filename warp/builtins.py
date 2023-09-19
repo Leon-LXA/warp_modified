@@ -1288,7 +1288,6 @@ add_builtin(
     value_type=None,
     doc="",
     group="Utility",
-    hidden=True,
 )
 
 add_builtin(
@@ -1309,17 +1308,15 @@ add_builtin(
     value_type=None,
     doc="",
     group="Utility",
-    hidden=True,
 )
 
 
 add_builtin(
     "dense_chol",
-    input_types={"n": int, "A": array(dtype=float), "regularization": float, "L": array(dtype=float)},
+    input_types={"n": int, "A": array(dtype=float), "regularization": array(dtype=float), "L": array(dtype=float)},
     value_type=None,
     doc="WIP",
     group="Utility",
-    hidden=True,
 )
 
 add_builtin(
@@ -1328,13 +1325,12 @@ add_builtin(
         "A_start": array(dtype=int),
         "A_dim": array(dtype=int),
         "A": array(dtype=float),
-        "regularization": float,
+        "regularization": array(dtype=float),
         "L": array(dtype=float),
     },
     value_type=None,
     doc="WIP",
     group="Utility",
-    hidden=True,
 )
 
 add_builtin(
@@ -1343,7 +1339,6 @@ add_builtin(
     value_type=None,
     doc="WIP",
     group="Utility",
-    hidden=True,
 )
 
 add_builtin(
@@ -1359,7 +1354,6 @@ add_builtin(
     value_type=None,
     doc="WIP",
     group="Utility",
-    hidden=True,
 )
 
 add_builtin(
@@ -1377,7 +1371,6 @@ add_builtin(
     value_type=None,
     doc="WIP",
     group="Utility",
-    hidden=True,
 )
 
 

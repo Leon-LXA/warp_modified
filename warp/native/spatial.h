@@ -569,9 +569,8 @@ CUDA_CALLABLE inline void adj_spatial_jacobian(
 }
 
 
-template<typename Type>
-CUDA_CALLABLE inline void spatial_mass(const spatial_matrix_t<Type>* I_s, int joint_start, int joint_count, int M_start, Type* M)
-{
+CUDA_CALLABLE inline void spatial_mass(const spatial_matrix_t<float>* I_s, int joint_start, int joint_count, int M_start, float* M)
+{   
     const int stride = joint_count*6;
 
     for (int l=0; l < joint_count; ++l)
@@ -583,21 +582,20 @@ CUDA_CALLABLE inline void spatial_mass(const spatial_matrix_t<Type>* I_s, int jo
                 M[M_start + row_index(stride, l*6 + i, l*6 + j)] = I_s[joint_start + l].data[i][j];
             }
         }
-    } 
+    }
 }
 
-template<typename Type>
 CUDA_CALLABLE inline void adj_spatial_mass(
-    const spatial_matrix_t<Type>* I_s, 
+    const spatial_matrix_t<float>* I_s, 
     const int joint_start,
     const int joint_count, 
     const int M_start,
-    const Type* M,
-    spatial_matrix_t<Type>* adj_I_s, 
+    const float* M,
+    spatial_matrix_t<float>* adj_I_s, 
     int& adj_joint_start,
     int& adj_joint_count, 
     int& adj_M_start,
-    const Type* adj_M)
+    const float* adj_M)
 {
     const int stride = joint_count*6;
 

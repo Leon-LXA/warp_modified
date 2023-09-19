@@ -11,6 +11,7 @@
 namespace wp
 {
 
+const int kNumThreadsPerBlock = 256;
 
 CUDA_CALLABLE inline int dense_index(int stride, int i, int j)
 {
@@ -55,13 +56,13 @@ template <bool add=false>
 CUDA_CALLABLE inline void dense_gemm(int m, int n, int p, int t1, int t2, const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C)
 {
     if (t1 == 0 && t2 == 0)
-        dense_gemm_impl<false, false, add>(m, n, p, A.data, B.data, C.data);
+        dense_gemm_impl<false, false, add>(m, n, p, A, B, C);
     else if (t1 == 1 && t2 == 0)
-        dense_gemm_impl<true, false, add>(m, n, p, A.data, B.data, C.data);
+        dense_gemm_impl<true, false, add>(m, n, p, A, B, C);
     else if (t1 == 0 && t2 == 1)
-        dense_gemm_impl<false, true, add>(m, n, p, A.data, B.data, C.data);
+        dense_gemm_impl<false, true, add>(m, n, p, A, B, C);
     else if (t1 == 1 && t2 == 1)
-        dense_gemm_impl<true, true, add>(m, n, p, A.data, B.data, C.data);
+        dense_gemm_impl<true, true, add>(m, n, p, A, B, C);
 }
 
 template <bool add=false>
@@ -225,8 +226,8 @@ CUDA_CALLABLE inline void adj_dense_gemm_batched(
 
 
 CUDA_CALLABLE inline void adj_dense_chol(
-    int n, const array_t<float>& A, float regularization, array_t<float>& L,
-    int adj_n, const array_t<float>& adj_A, float adj_regularization, array_t<float>& adj_L)
+    int n, const array_t<float>& A, const float* __restrict__ regularization, array_t<float>& L,
+    int adj_n, const array_t<float>& adj_A, const float* __restrict__ adj_regularization, array_t<float>& adj_L)
 {
     // nop, use dense_solve to differentiate through (A^-1)b = x
 }

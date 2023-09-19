@@ -74,7 +74,7 @@ def eval_rigid_contacts_art(
     body_v_s: wp.array(dtype=wp.spatial_vector),
     contact_body: wp.array(dtype=int),
     contact_point: wp.array(dtype=wp.vec3),
-    contact_shape: wp.array(dtype=float),
+    contact_shape: wp.array(dtype=int),
     shape_materials: ModelShapeMaterials,
     geo: ModelShapeGeometry,
     body_f_s: wp.array(dtype=wp.spatial_vector)):
@@ -810,8 +810,7 @@ def eval_rigid_jacobian(
 
     J_offset = articulation_J_start[tid]
 
-    wp.spatial_jacobian(joint_S_s, joint_parent, joint_qd_start, joint_start, joint_count, J_offset, J)
-
+    # wp.spatial_jacobian(joint_S_s, joint_parent, joint_qd_start, joint_start, joint_count, J_offset, J)
 
 @wp.kernel
 def eval_rigid_mass(
@@ -832,31 +831,31 @@ def eval_rigid_mass(
 
     wp.spatial_mass(body_I_s, joint_start, joint_count, M_offset, M)
 
-# @wp.kernel
-# def eval_dense_gemm(m: int, n: int, p: int, t1: int, t2: int, A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
-#     wp.dense_gemm(m, n, p, t1, t2, A, B, C)
+@wp.kernel
+def eval_dense_gemm(m: int, n: int, p: int, t1: int, t2: int, A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
+    wp.dense_gemm(m, n, p, t1, t2, A, B, C)
 
-# @wp.kernel
-# def eval_dense_gemm_batched(m: wp.array(dtype=int), n: wp.array(dtype=int), p: wp.array(dtype=int), t1: int, t2: int, A_start: wp.array(dtype=int), B_start: wp.array(dtype=int), C_start: wp.array(dtype=int), A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
-#     wp.dense_gemm_batched(m, n, p, t1, t2, A_start, B_start, C_start, A, B, C)
+@wp.kernel
+def eval_dense_gemm_batched(m: wp.array(dtype=int), n: wp.array(dtype=int), p: wp.array(dtype=int), t1: int, t2: int, A_start: wp.array(dtype=int), B_start: wp.array(dtype=int), C_start: wp.array(dtype=int), A: wp.array(dtype=float), B: wp.array(dtype=float), C: wp.array(dtype=float)):
+    wp.dense_gemm_batched(m, n, p, t1, t2, A_start, B_start, C_start, A, B, C)
 
-# @wp.kernel
-# def eval_dense_cholesky(n: int, A: wp.array(dtype=float), regularization: wp.array(dtype=float), L: wp.array(dtype=float)):
-#     wp.dense_chol(n, A, regularization, L)
+@wp.kernel
+def eval_dense_cholesky(n: int, A: wp.array(dtype=float), regularization: wp.array(dtype=float), L: wp.array(dtype=float)):
+    wp.dense_chol(n, A, regularization, L)
 
 @wp.kernel
 def eval_dense_cholesky_batched(A_start: wp.array(dtype=int), A_dim: wp.array(dtype=int), A: wp.array(dtype=float), regularization: wp.array(dtype=float), L: wp.array(dtype=float)):
     wp.dense_chol_batched(A_start, A_dim, A, regularization, L)
 
-# @wp.kernel
-# def eval_dense_subs(n: int, L: wp.array(dtype=float), b: wp.array(dtype=float), x: wp.array(dtype=float)):
-#     wp.dense_subs(n, L, b, x)
+@wp.kernel
+def eval_dense_subs(n: int, L: wp.array(dtype=float), b: wp.array(dtype=float), x: wp.array(dtype=float)):
+    wp.dense_subs(n, L, b, x)
 
-# # helper that propagates gradients back to A, treating L as a constant / temporary variable
-# # allows us to reuse the Cholesky decomposition from the forward pass
-# @wp.kernel
-# def eval_dense_solve(n: int, A: wp.array(dtype=float), L: wp.array(dtype=float), b: wp.array(dtype=float), tmp: wp.array(dtype=float), x: wp.array(dtype=float)):
-#     wp.dense_solve(n, A, L, b, tmp, x)
+# helper that propagates gradients back to A, treating L as a constant / temporary variable
+# allows us to reuse the Cholesky decomposition from the forward pass
+@wp.kernel
+def eval_dense_solve(n: int, A: wp.array(dtype=float), L: wp.array(dtype=float), b: wp.array(dtype=float), tmp: wp.array(dtype=float), x: wp.array(dtype=float)):
+    wp.dense_solve(n, A, L, b, tmp, x)
 
 # helper that propagates gradients back to A, treating L as a constant / temporary variable
 # allows us to reuse the Cholesky decomposition from the forward pass
@@ -902,8 +901,8 @@ class SemiImplicitArticulationIntegrator:
     def __init__(self):
         pass
 
-    def simulate(self, model, state_in, state_out, dt, update_mass_matrix=True):
-        
+    def simulate(self, model, state_in, state_out, dt, requires_grad=True):
+        update_mass_matrix=True
         # evaluate body transforms
         wp.launch(
             kernel=eval_rigid_fk,

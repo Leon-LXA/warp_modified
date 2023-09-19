@@ -41,6 +41,8 @@ from .integrator_euler import VariationalImplicitIntegrator
 
 from .integrator_xpbd import XPBDIntegrator
 
+from .integrator_articulation import SemiImplicitArticulationIntegrator
+
 from .collide import collide
 from .articulation import eval_fk, eval_ik
 
