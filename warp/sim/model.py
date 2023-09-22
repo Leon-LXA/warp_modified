@@ -16,6 +16,7 @@ import numpy as np
 
 import warp as wp
 
+from warp.utils import spatial_matrix_from_inertia
 from .inertia import (
     compute_box_inertia,
     compute_capsule_inertia,
@@ -239,6 +240,7 @@ class State:
     """
 
     def __init__(self):
+        self.composite_rigid_body_alg = False
         self.particle_count = 0
         self.body_count = 0
 
@@ -256,6 +258,10 @@ class State:
 
         if self.body_count:
             self.body_f.zero_()
+
+        if self.composite_rigid_body_alg:
+            self.body_ft_s.zero_()
+            self.tmp.zero_()
 
     def flatten(self):
         wp.utils.warn(
@@ -551,6 +557,7 @@ class Model:
         self.body_mass = None
         self.body_inv_mass = None
         self.body_name = None
+        self.body_I_m = None
 
         self.joint_q = None
         self.joint_qd = None
@@ -560,6 +567,7 @@ class Model:
         self.joint_child = None
         self.joint_X_p = None
         self.joint_X_c = None
+        self.joint_X_cm = None
         self.joint_axis = None
         self.joint_armature = None
         self.joint_target = None
@@ -673,16 +681,18 @@ class Model:
             # joints
             s.joint_qdd = wp.empty_like(self.joint_qd, requires_grad=True)
             s.joint_tau = wp.empty_like(self.joint_qd, requires_grad=True)
-            s.joint_S_s = wp.empty((self.joint_dof_count, 6), dtype=wp.float32, requires_grad=True)            
+            s.joint_S_s = wp.empty((self.joint_dof_count), dtype=wp.spatial_vectorf, requires_grad=True)            
 
             # derived rigid body data (maximal coordinates)
-            s.body_X_sc = wp.empty((self.body_count, 7), dtype=wp.float32, requires_grad=True)
-            s.body_X_sm = wp.empty((self.body_count, 7), dtype=wp.float32, requires_grad=True)
-            s.body_I_s = wp.empty((self.body_count, 6, 6), dtype=wp.float32, requires_grad=True)
-            s.body_v_s = wp.empty((self.body_count, 6), dtype=wp.float32, requires_grad=True)
-            s.body_a_s = wp.empty((self.body_count, 6), dtype=wp.float32, requires_grad=True)
-            s.body_f_s = wp.zeros((self.body_count, 6), dtype=wp.float32, requires_grad=True)
-            s.body_ft_s = wp.zeros((self.body_count, 6), dtype=wp.float32, requires_grad=True)
+            s.body_X_sc = wp.empty((self.body_count), dtype=wp.transformf, requires_grad=True)
+            s.body_X_sm = wp.empty((self.body_count), dtype=wp.transformf, requires_grad=True)
+            s.body_I_s = wp.empty((self.body_count), dtype=wp.spatial_matrixf, requires_grad=True)
+            s.body_v_s = wp.empty((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+            s.body_a_s = wp.empty((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+            s.body_f_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+            s.body_ft_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+
+            s.tmp = wp.empty_like(self.joint_qd, requires_grad=True)
 
         return s
 
@@ -715,18 +725,22 @@ class Model:
         for a, b in self.shape_collision_filter_pairs:
             filters.add((b, a))
         contact_pairs = []
-        # iterate over collision groups (islands)
-        for group, shapes in self.shape_collision_group_map.items():
-            for shape_a, shape_b in itertools.product(shapes, shapes):
-                if shape_a < shape_b and (shape_a, shape_b) not in filters:
-                    contact_pairs.append((shape_a, shape_b))
-            if group != -1 and -1 in self.shape_collision_group_map:
-                # shapes with collision group -1 collide with all other shapes
-                for shape_a, shape_b in itertools.product(shapes, self.shape_collision_group_map[-1]):
+        if not self.composite_rigid_body_alg:
+            # iterate over collision groups (islands)
+            for group, shapes in self.shape_collision_group_map.items():
+                for shape_a, shape_b in itertools.product(shapes, shapes):
                     if shape_a < shape_b and (shape_a, shape_b) not in filters:
                         contact_pairs.append((shape_a, shape_b))
-        self.shape_contact_pairs = wp.array(np.array(contact_pairs), dtype=wp.int32, device=self.device)
-        self.shape_contact_pair_count = len(contact_pairs)
+                if group != -1 and -1 in self.shape_collision_group_map:
+                    # shapes with collision group -1 collide with all other shapes
+                    for shape_a, shape_b in itertools.product(shapes, self.shape_collision_group_map[-1]):
+                        if shape_a < shape_b and (shape_a, shape_b) not in filters:
+                            contact_pairs.append((shape_a, shape_b))
+            self.shape_contact_pairs = wp.array(np.array(contact_pairs), dtype=wp.int32, device=self.device)
+            self.shape_contact_pair_count = len(contact_pairs)
+        else:
+            self.shape_contact_pairs = None
+            self.shape_contact_pair_count = None
         # find ground contact pairs
         ground_contact_pairs = []
         ground_id = self.shape_count - 1
@@ -741,20 +755,20 @@ class Model:
         Counts the maximum number of contact points that need to be allocated.
         """
         from .collide import count_contact_points
-
         # calculate the potential number of shape pair contact points
         contact_count = wp.zeros(1, dtype=wp.int32, device=self.device)
-        wp.launch(
-            kernel=count_contact_points,
-            dim=self.shape_contact_pair_count,
-            inputs=[
-                self.shape_contact_pairs,
-                self.shape_geo,
-            ],
-            outputs=[contact_count],
-            device=self.device,
-            record_tape=False,
-        )
+        if not self.composite_rigid_body_alg:
+            wp.launch(
+                kernel=count_contact_points,
+                dim=self.shape_contact_pair_count,
+                inputs=[
+                    self.shape_contact_pairs,
+                    self.shape_geo,
+                ],
+                outputs=[contact_count],
+                device=self.device,
+                record_tape=False,
+            )
         # count ground contacts
         wp.launch(
             kernel=count_contact_points,
@@ -1142,7 +1156,10 @@ class ModelBuilder:
 
         # contacts to be generated within the given distance margin to be generated at
         # every simulation substep (can be 0 if only one PBD solver iteration is used)
-        self.rigid_contact_margin = 0.1
+        if self.composite_rigid_body_alg:
+            self.rigid_contact_margin = 1e6
+        else:
+            self.rigid_contact_margin = 0.1
         # torsional friction coefficient (only considered by XPBD so far)
         self.rigid_contact_torsional_friction = 0.5
         # rolling friction coefficient (only considered by XPBD so far)
@@ -1516,7 +1533,7 @@ class ModelBuilder:
         for i in range(dof_count):
             self.joint_qd.append(0.0)
             self.joint_act.append(0.0)
-            self.joint_armature.append(joint_armature)
+            self.joint_armature.extend(joint_armature)
 
         if joint_type == JOINT_FREE or joint_type == JOINT_BALL:
             # ensure that a valid quaternion is used for the angular dofs
@@ -1532,6 +1549,17 @@ class ModelBuilder:
             for child_shape in self.body_shapes[child]:
                 for parent_shape in self.body_shapes[parent]:
                     self.shape_collision_filter_pairs.add((parent_shape, child_shape))
+
+        # articulation, hardcoded to work with legacy simulation
+        if joint_type == JOINT_FREE and self.composite_rigid_body_alg:
+            self.joint_axis.append([0.0,0.0,0.0])
+            self.joint_target.extend([0.0,0.0,0.0,0.0,0.0,0.0,0.0])
+            self.joint_target_ke.append(0.0)
+            self.joint_target_kd.append(0.0)
+            self.joint_limit_ke.append(0.0)
+            self.joint_limit_kd.append(0.0)
+            self.joint_limit_lower.append(-1e6)
+            self.joint_limit_upper.append(1e6)
 
         return self.joint_count - 1
 
@@ -3796,6 +3824,7 @@ class ModelBuilder:
             # construct Model (non-time varying) data
 
             m = Model(device)
+            m.composite_rigid_body_alg = self.composite_rigid_body_alg
             m.requires_grad = requires_grad
 
             m.num_envs = self.num_envs
@@ -3939,9 +3968,6 @@ class ModelBuilder:
             m.joint_qd = wp.array(self.joint_qd, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_name = self.joint_name
 
-            # articulations
-            m.composite_rigid_body_alg = self.composite_rigid_body_alg
-
             # dynamics properties
             m.joint_armature = wp.array(self.joint_armature, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_target = wp.array(self.joint_target, dtype=wp.float32, requires_grad=requires_grad)
@@ -3962,18 +3988,6 @@ class ModelBuilder:
             )
             m.joint_enabled = wp.array(self.joint_enabled, dtype=wp.int32)
 
-            # 'close' the start index arrays with a sentinel value
-            joint_q_start = copy.copy(self.joint_q_start)
-            joint_q_start.append(self.joint_coord_count)
-            joint_qd_start = copy.copy(self.joint_qd_start)
-            joint_qd_start.append(self.joint_dof_count)
-            articulation_start = copy.copy(self.articulation_start)
-            articulation_start.append(self.joint_count)
-
-            m.joint_q_start = wp.array(joint_q_start, dtype=wp.int32)
-            m.joint_qd_start = wp.array(joint_qd_start, dtype=wp.int32)
-            m.articulation_start = wp.array(articulation_start, dtype=wp.int32)
-
             # counts
             m.particle_count = len(self.particle_q)
             m.body_count = len(self.body_q)
@@ -3984,6 +3998,15 @@ class ModelBuilder:
             m.spring_count = len(self.spring_rest_length)
             m.muscle_count = len(self.muscle_start)
             m.articulation_count = len(self.articulation_start)
+
+            # 'close' the start index arrays with a sentinel value
+            self.joint_q_start.append(self.joint_coord_count)
+            self.joint_qd_start.append(self.joint_dof_count)
+            self.articulation_start.append(self.joint_count)
+
+            m.joint_q_start = wp.array(self.joint_q_start, dtype=wp.int32)
+            m.joint_qd_start = wp.array(self.joint_qd_start, dtype=wp.int32)
+            m.articulation_start = wp.array(self.articulation_start, dtype=wp.int32)
 
             # contacts
             if m.particle_count:
@@ -4015,6 +4038,15 @@ class ModelBuilder:
 
             # articulations
             if self.composite_rigid_body_alg:
+                body_I_m = []
+                body_X_cm = []
+                for i in range(len(self.body_inertia)):
+                    body_I_m.append(spatial_matrix_from_inertia(self.body_inertia[i], self.body_mass[i]))
+                    body_X_cm.append(wp.transform(self.body_com[i], wp.quat_identity()))
+
+                m.body_I_m = wp.array(body_I_m, dtype=wp.spatial_matrixf)
+                m.joint_X_cm = wp.array(body_X_cm, dtype=wp.transform)
+
                 # calculate total size and offsets of Jacobian and mass matrices for entire system
                 m.J_size = 0
                 m.M_size = 0

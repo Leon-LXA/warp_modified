@@ -29,7 +29,7 @@ from warp.types import Bvh, Mesh, HashGrid, Volume, MarchingCubes
 from warp.types import bvh_query_t, mesh_query_aabb_t, hash_grid_query_t
 
 # device-wide gemms
-from warp.types import matmul, adj_matmul, batched_matmul, adj_batched_matmul, matmul_batched, from_ptr
+from warp.types import matmul, adj_matmul, batched_matmul, adj_batched_matmul, from_ptr
 
 # deprecated
 from warp.types import vector as vec

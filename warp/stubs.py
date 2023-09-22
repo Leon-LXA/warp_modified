@@ -40,7 +40,7 @@ from warp.types import spatial_matrix, spatial_matrixh, spatial_matrixf, spatial
 from warp.types import Bvh, Mesh, HashGrid, Volume, MarchingCubes
 from warp.types import bvh_query_t, mesh_query_aabb_t, hash_grid_query_t
 
-from warp.types import matmul, adj_matmul, batched_matmul, adj_batched_matmul, matmul_batched, from_ptr
+from warp.types import matmul, adj_matmul, batched_matmul, adj_batched_matmul, from_ptr
 
 from warp.types import vector as vec
 from warp.types import matrix as mat

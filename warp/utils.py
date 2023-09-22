@@ -362,8 +362,8 @@ def spatial_outer(a, b):
     return np.outer(a, b)
 
 
-# def spatial_matrix():
-#     return np.zeros((6, 6))
+def spatial_matrix():
+    return np.zeros((6, 6))
 
 
 def spatial_matrix_from_inertia(I, m):

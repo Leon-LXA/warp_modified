@@ -457,15 +457,14 @@ CUDA_CALLABLE inline int row_index(int stride, int i, int j)
 }
 
 // builds spatial Jacobian J which is an (joint_count*6)x(dof_count) matrix
-template<typename Type>
 CUDA_CALLABLE inline void spatial_jacobian(
-    const spatial_vector_t<Type>* S,
+    const spatial_vector_t<float>* S,
     const int* joint_parents, 
     const int* joint_qd_start, 
     int joint_start,    // offset of the first joint for the articulation
     int joint_count,    
     int J_start,
-    Type* J)
+    float* J)
 {
     const int articulation_dof_start = joint_qd_start[joint_start];
     const int articulation_dof_end = joint_qd_start[joint_start + joint_count];
@@ -494,12 +493,12 @@ CUDA_CALLABLE inline void spatial_jacobian(
             {
                 const int col = (joint_dof_start-articulation_dof_start) + dof;
 
-                J[row_index(articulation_dof_count, row_start+0, col)] = S[col].w[0];
-                J[row_index(articulation_dof_count, row_start+1, col)] = S[col].w[1];
-                J[row_index(articulation_dof_count, row_start+2, col)] = S[col].w[2];
-                J[row_index(articulation_dof_count, row_start+3, col)] = S[col].v[0];
-                J[row_index(articulation_dof_count, row_start+4, col)] = S[col].v[1];
-                J[row_index(articulation_dof_count, row_start+5, col)] = S[col].v[2];
+                J[row_index(articulation_dof_count, row_start+0, col)] = S[col][0];
+                J[row_index(articulation_dof_count, row_start+1, col)] = S[col][1];
+                J[row_index(articulation_dof_count, row_start+2, col)] = S[col][2];
+                J[row_index(articulation_dof_count, row_start+3, col)] = S[col][3];
+                J[row_index(articulation_dof_count, row_start+4, col)] = S[col][4];
+                J[row_index(articulation_dof_count, row_start+5, col)] = S[col][5];
             }
 
             j = joint_parents[j];
@@ -507,23 +506,22 @@ CUDA_CALLABLE inline void spatial_jacobian(
     }
 }
 
-template<typename Type>
 CUDA_CALLABLE inline void adj_spatial_jacobian(
-    const spatial_vector_t<Type>* S, 
+    const spatial_vector_t<float>* S, 
     const int* joint_parents, 
     const int* joint_qd_start, 
     const int joint_start,
     const int joint_count, 
     const int J_start, 
-    const Type* J,
+    const float* J,
     // adjs
-    spatial_vector_t<Type>* adj_S, 
+    spatial_vector_t<float>* adj_S, 
     int* adj_joint_parents, 
     int* adj_joint_qd_start, 
     int& adj_joint_start,
     int& adj_joint_count, 
     int& adj_J_start, 
-    const Type* adj_J)
+    const float* adj_J)
 {   
     const int articulation_dof_start = joint_qd_start[joint_start];
     const int articulation_dof_end = joint_qd_start[joint_start + joint_count];
@@ -555,12 +553,12 @@ CUDA_CALLABLE inline void adj_spatial_jacobian(
             {
                 const int col = (joint_dof_start-articulation_dof_start) + dof;
 
-                adj_S[col].w[0] += adj_J[row_index(articulation_dof_count, row_start+0, col)];
-                adj_S[col].w[1] += adj_J[row_index(articulation_dof_count, row_start+1, col)];
-                adj_S[col].w[2] += adj_J[row_index(articulation_dof_count, row_start+2, col)];
-                adj_S[col].v[0] += adj_J[row_index(articulation_dof_count, row_start+3, col)];
-                adj_S[col].v[1] += adj_J[row_index(articulation_dof_count, row_start+4, col)];
-                adj_S[col].v[2] += adj_J[row_index(articulation_dof_count, row_start+5, col)];
+                adj_S[col][0] += adj_J[row_index(articulation_dof_count, row_start+0, col)];
+                adj_S[col][1] += adj_J[row_index(articulation_dof_count, row_start+1, col)];
+                adj_S[col][2] += adj_J[row_index(articulation_dof_count, row_start+2, col)];
+                adj_S[col][3] += adj_J[row_index(articulation_dof_count, row_start+3, col)];
+                adj_S[col][4] += adj_J[row_index(articulation_dof_count, row_start+4, col)];
+                adj_S[col][5] += adj_J[row_index(articulation_dof_count, row_start+5, col)];
             }
 
             j = joint_parents[j];

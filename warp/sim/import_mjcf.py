@@ -31,7 +31,7 @@ def parse_mjcf(
     limit_kd=10.0,
     scale=1.0,
     armature=0.0,
-    joint_armature=0.0,
+    armature_joint=0.0,
     armature_scale=1.0,
     parse_meshes=True,
     enable_self_collisions=False,
@@ -246,7 +246,10 @@ def parse_mjcf(
             joint_name.append(joint_attrib["name"])
             joint_pos.append(parse_vec(joint_attrib, "pos", (0.0, 0.0, 0.0)) * scale)
             joint_range = parse_vec(joint_attrib, "range", (-3.0, 3.0))
-            joint_armature.append(parse_float(joint_attrib, "armature", armature) * armature_scale)
+            if joint_type_str == "free":
+                joint_armature.append(0.0)
+            else:
+                joint_armature.append(armature_joint * armature_scale)
 
             if joint_type_str == "free":
                 joint_type = wp.sim.JOINT_FREE
@@ -276,7 +279,7 @@ def parse_mjcf(
 
         link = builder.add_body(
             origin=wp.transform(body_pos, body_ori),  # will be evaluated in fk()
-            armature=joint_armature[0] if len(joint_armature) > 0 else armature,
+            armature=armature * armature_scale,
             name=body_name,
         )
 
