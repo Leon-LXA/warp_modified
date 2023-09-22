@@ -927,7 +927,7 @@ class SemiImplicitArticulationIntegrator:
     def __init__(self):
         pass
 
-    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=True):
+    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=False):
 
         # evaluate body transforms
         wp.launch(
