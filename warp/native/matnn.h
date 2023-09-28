@@ -27,29 +27,50 @@ CUDA_CALLABLE inline int dense_index(int rows, int cols, int i, int j)
         return i*cols + j;
 }
 
-
-
 template <bool t1, bool t2, bool add>
 CUDA_CALLABLE inline void dense_gemm_impl(int m, int n, int p, const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C)
 {
-    for (int i=0; i < m; i++)
+    // each thread in the block calculates an output (or more if output dim > block dim)
+    for (int e=threadIdx.x; e < m*n; e += blockDim.x)
     {
-        for (int j=0; j < n; ++j)
-        {
-            float sum = 0.0f;
+        const int i=e/n;
+        const int j=e%n;
 
-            for (int k=0; k < p; ++k)
-            {
-                sum += A[dense_index<t1>(m, p, i, k)]*B[dense_index<t2>(p, n, k, j)];
-            }
-            
-            if (add)
-                C[i*n + j] += sum;
-            else
-                C[i*n + j] = sum;
+        float sum = 0.0f;
+
+        for (int k=0; k < p; ++k)
+        {
+            sum += A[dense_index<t1>(m, p, i, k)]*B[dense_index<t2>(p, n, k, j)];
         }
+        
+        if (add)
+            C[i*n + j] += sum;
+        else
+            C[i*n + j] = sum;
     }
 }
+
+// template <bool t1, bool t2, bool add>
+// CUDA_CALLABLE inline void dense_gemm_impl(int m, int n, int p, const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C)
+// {
+//     for (int i=0; i < m; i++)
+//     {
+//         for (int j=0; j < n; ++j)
+//         {
+//             float sum = 0.0f;
+
+//             for (int k=0; k < p; ++k)
+//             {
+//                 sum += A[dense_index<t1>(m, p, i, k)]*B[dense_index<t2>(p, n, k, j)];
+//             }
+            
+//             if (add)
+//                 C[i*n + j] += sum;
+//             else
+//                 C[i*n + j] = sum;
+//         }
+//     }
+// }
 
 
 template <bool add=false>

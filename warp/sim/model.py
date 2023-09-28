@@ -679,20 +679,20 @@ class Model:
             s.joint_qd.requires_grad = requires_grad
 
             # joints
-            s.joint_qdd = wp.empty_like(self.joint_qd, requires_grad=True)
-            s.joint_tau = wp.empty_like(self.joint_qd, requires_grad=True)
-            s.joint_S_s = wp.empty((self.joint_dof_count), dtype=wp.spatial_vectorf, requires_grad=True)            
+            s.joint_qdd = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.joint_tau = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.joint_S_s = wp.zeros((self.joint_dof_count), dtype=wp.spatial_vectorf, requires_grad=True)            
 
             # derived rigid body data (maximal coordinates)
-            s.body_X_sc = wp.empty((self.body_count), dtype=wp.transformf, requires_grad=True)
-            s.body_X_sm = wp.empty((self.body_count), dtype=wp.transformf, requires_grad=True)
-            s.body_I_s = wp.empty((self.body_count), dtype=wp.spatial_matrixf, requires_grad=True)
-            s.body_v_s = wp.empty((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
-            s.body_a_s = wp.empty((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+            s.body_X_sc = wp.zeros((self.body_count), dtype=wp.transformf, requires_grad=True)
+            s.body_X_sm = wp.zeros((self.body_count), dtype=wp.transformf, requires_grad=True)
+            s.body_I_s = wp.zeros((self.body_count), dtype=wp.spatial_matrixf, requires_grad=True)
+            s.body_v_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+            s.body_a_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
             s.body_f_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
             s.body_ft_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
 
-            s.tmp = wp.empty_like(self.joint_qd, requires_grad=True)
+            s.tmp = wp.zeros_like(self.joint_qd, requires_grad=True)
 
         return s
 
@@ -712,8 +712,6 @@ class Model:
             self.J = wp.zeros(self.J_size, dtype=wp.float32, requires_grad=True)
             self.P = wp.empty(self.J_size, dtype=wp.float32, requires_grad=True)
             self.H = wp.empty(self.H_size, dtype=wp.float32, requires_grad=True)
-
-            # zero since only upper triangle is set which can trigger NaN detection
             self.L = wp.zeros(self.H_size, dtype=wp.float32,requires_grad=True)
 
     def find_shape_contact_pairs(self):
