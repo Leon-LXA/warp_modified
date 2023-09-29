@@ -926,9 +926,8 @@ class SemiImplicitArticulationIntegrator:
 
     def __init__(self):
         pass
-
-    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=False):
-
+    
+    def eval_rigid_fk(self, model, state_in):
         # evaluate body transforms
         wp.launch(
             kernel=eval_rigid_fk,
@@ -950,7 +949,91 @@ class SemiImplicitArticulationIntegrator:
             ],
             device=model.device,
             )
+        
+    def update_mass_matrix(self, model, state_out):
+        # build J
+        wp.launch(
+            kernel=eval_rigid_jacobian,
+            dim=model.articulation_count,
+            inputs=[
+                # inputs
+                model.articulation_start, # now, originally articulation_joint_start
+                model.articulation_J_start,
+                model.joint_parent,
+                model.joint_qd_start,
+                state_out.joint_S_s
+            ],
+            outputs=[
+                model.J
+            ],
+            device=model.device,
+            )
 
+        # build M
+        wp.launch(
+            kernel=eval_rigid_mass,
+            dim=model.articulation_count,                      
+            inputs=[
+                # inputs
+                model.articulation_start, # now, originally articulation_joint_start
+                model.articulation_M_start,
+                state_out.body_I_s
+            ],
+            outputs=[
+                model.M
+            ],
+            device=model.device,
+            )
+
+        # form P = M*J
+        matmul_batched(
+            model.articulation_count,
+            model.articulation_M_rows,
+            model.articulation_J_cols,
+            model.articulation_J_rows,
+            0,
+            0,
+            model.articulation_M_start,
+            model.articulation_J_start,
+            model.articulation_J_start,     # P start is the same as J start since it has the same dims as J
+            model.M,
+            model.J,
+            model.P,
+            device=model.device)
+
+        # form H = J^T*P
+        matmul_batched(
+            model.articulation_count,
+            model.articulation_J_cols,
+            model.articulation_J_cols,
+            model.articulation_J_rows,      # P rows is the same as J rows 
+            1,
+            0,
+            model.articulation_J_start,
+            model.articulation_J_start,     # P start is the same as J start since it has the same dims as J
+            model.articulation_H_start,
+            model.J,
+            model.P,
+            model.H,
+            device=model.device)
+
+        # compute decomposition
+        wp.launch(
+            kernel=eval_dense_cholesky_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.joint_armature
+            ],
+            outputs=[
+                model.L
+            ],
+            device=model.device,
+            )
+
+    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=False):
         # evaluate joint inertias, motion vectors, and forces
         wp.launch(
             kernel=eval_rigid_id,
@@ -1036,89 +1119,10 @@ class SemiImplicitArticulationIntegrator:
             )
 
         if (update_mass_matrix):
+            # model.alloc_mass_matrix()
+            self.update_mass_matrix(model, state_out)
 
-            # build J
-            wp.launch(
-                kernel=eval_rigid_jacobian,
-                dim=model.articulation_count,
-                inputs=[
-                    # inputs
-                    model.articulation_start, # now, originally articulation_joint_start
-                    model.articulation_J_start,
-                    model.joint_parent,
-                    model.joint_qd_start,
-                    state_out.joint_S_s
-                ],
-                outputs=[
-                    model.J
-                ],
-                device=model.device,
-                )
-
-            # build M
-            wp.launch(
-                kernel=eval_rigid_mass,
-                dim=model.articulation_count,                      
-                inputs=[
-                    # inputs
-                    model.articulation_start, # now, originally articulation_joint_start
-                    model.articulation_M_start,
-                    state_out.body_I_s
-                ],
-                outputs=[
-                    model.M
-                ],
-                device=model.device,
-                )
-
-            # form P = M*J
-            matmul_batched(
-                model.articulation_count,
-                model.articulation_M_rows,
-                model.articulation_J_cols,
-                model.articulation_J_rows,
-                0,
-                0,
-                model.articulation_M_start,
-                model.articulation_J_start,
-                model.articulation_J_start,     # P start is the same as J start since it has the same dims as J
-                model.M,
-                model.J,
-                model.P,
-                device=model.device)
-
-            # form H = J^T*P
-            matmul_batched(
-                model.articulation_count,
-                model.articulation_J_cols,
-                model.articulation_J_cols,
-                model.articulation_J_rows,      # P rows is the same as J rows 
-                1,
-                0,
-                model.articulation_J_start,
-                model.articulation_J_start,     # P start is the same as J start since it has the same dims as J
-                model.articulation_H_start,
-                model.J,
-                model.P,
-                model.H,
-                device=model.device)
-
-            # compute decomposition
-            wp.launch(
-                kernel=eval_dense_cholesky_batched,
-                dim=model.articulation_count,
-                inputs=[
-                    model.articulation_H_start,
-                    model.articulation_H_rows,
-                    model.H,
-                    model.joint_armature
-                ],
-                outputs=[
-                    model.L
-                ],
-                device=model.device,
-                )
-
+        # tmp = wp.zeros_like(state_out.joint_tau, device=model.device)
 
         # solve for qdd
         wp.launch(
@@ -1179,5 +1183,4 @@ class SemiImplicitArticulationIntegrator:
             ],
             device=model.device,
             )
-
         return state_out
