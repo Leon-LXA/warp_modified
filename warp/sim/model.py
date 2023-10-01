@@ -671,13 +671,14 @@ class Model:
             s.body_qd.requires_grad = requires_grad
             s.body_f.requires_grad = requires_grad
 
-        if self.composite_rigid_body_alg:
+
             s.joint_q = wp.clone(self.joint_q)
             s.joint_qd = wp.clone(self.joint_qd)
 
             s.joint_q.requires_grad = requires_grad
             s.joint_qd.requires_grad = requires_grad
-
+        
+        if self.composite_rigid_body_alg:
             # joints
             s.joint_qdd = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.joint_tau = wp.zeros_like(self.joint_qd, requires_grad=True)
