@@ -396,7 +396,7 @@ def parse_urdf(
         builder.add_joint_fixed(-1, root, parent_xform=xform, name="fixed_base")
 
     # add joints, in topological order starting from root body
-    for joint in sorted_joints:
+    for joint in joints:
         parent = link_index[joint["parent"]]
         child = link_index[joint["child"]]
         if child == -1:

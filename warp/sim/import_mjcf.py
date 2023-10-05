@@ -303,7 +303,7 @@ def parse_mjcf(
             joint_type,
             parent,
             link,
-            joint_armature=joint_armature,
+            joint_armature=joint_armature[0],
             linear_axes=linear_axes,
             angular_axes=angular_axes,
             name="_".join(joint_name),

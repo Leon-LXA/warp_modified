@@ -1531,7 +1531,7 @@ class ModelBuilder:
         for i in range(dof_count):
             self.joint_qd.append(0.0)
             self.joint_act.append(0.0)
-            self.joint_armature.extend(joint_armature)
+            self.joint_armature.append(joint_armature)
 
         if joint_type == JOINT_FREE or joint_type == JOINT_BALL:
             # ensure that a valid quaternion is used for the angular dofs
