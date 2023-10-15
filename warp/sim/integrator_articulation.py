@@ -77,6 +77,7 @@ def eval_rigid_contacts_art(
     contact_shape: wp.array(dtype=int),
     shape_materials: ModelShapeMaterials,
     geo: ModelShapeGeometry,
+    alpha: float,
     body_f_s: wp.array(dtype=wp.spatial_vector)):
 
     tid = wp.tid()
@@ -120,7 +121,7 @@ def eval_rigid_contacts_art(
     vn = wp.dot(n, dpdt)        # velocity component out of the ground
     vt = dpdt - n * vn       # velocity component not into the ground
 
-    fn = c * ke              # normal force (restitution coefficient * how far inside for ground)
+    fn = compute_normal_force(c,ke, alpha)     # normal force (restitution coefficient * how far inside for ground)
 
     # contact damping
     fd = wp.min(vn, 0.0) * kd * wp.step(c) * (0.0 - c)
@@ -143,6 +144,15 @@ def eval_rigid_contacts_art(
 
     wp.atomic_add(body_f_s, c_body, wp.spatial_vector(t_total, f_total))
 
+
+@wp.func
+def compute_normal_force(c: float, ke: float, alpha: float):
+    return c * ke
+
+@wp.func_grad(compute_normal_force)
+def adj_compute_normal_force(c: float, ke: float, alpha: float, adj_ret: float):
+    wp.adjoint[c] += ke * adj_ret * alpha
+    wp.adjoint[ke] += c * adj_ret
 
 # compute transform across a joint
 @wp.func
@@ -1090,7 +1100,7 @@ class SemiImplicitArticulationIntegrator:
             device=model.device,
             )
 
-    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=False):
+    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=False, alpha = 1.0):
         if (model.ground and model.rigid_contact_max > 0):
             # evaluate contact forces
             wp.launch(
@@ -1105,6 +1115,7 @@ class SemiImplicitArticulationIntegrator:
                     model.rigid_contact_shape0,
                     model.shape_materials,
                     model.shape_geo,
+                    alpha,
                 ],
                 outputs=[
                     state_in.body_f_s
