@@ -124,20 +124,21 @@ def eval_rigid_contacts_art(
     fn = compute_normal_force(c,ke, alpha)     # normal force (restitution coefficient * how far inside for ground)
 
     # contact damping
-    fd = wp.min(vn, 0.0) * kd * wp.step(c) * (0.0 - c)
+    fd = compute_damping_force(vn, kd, c, alpha)
+    
 
     # viscous friction
     #ft = vt*kf
 
     # Coulomb friction (box)
-    lower = mu * (fn + fd)   # negative
-    upper = 0.0 - lower      # positive, workaround for no unary ops
+    # lower = mu * (fn + fd)   # negative
+    # upper = 0.0 - lower      # positive, workaround for no unary ops
 
-    vx = wp.clamp(wp.dot(wp.vec3(kf, 0.0, 0.0), vt), lower, upper)
-    vz = wp.clamp(wp.dot(wp.vec3(0.0, 0.0, kf), vt), lower, upper)
+    # vx = wp.clamp(wp.dot(wp.vec3(kf, 0.0, 0.0), vt), lower, upper)
+    # vz = wp.clamp(wp.dot(wp.vec3(0.0, 0.0, kf), vt), lower, upper)
 
     # Coulomb friction (smooth, but gradients are numerically unstable around |vt| = 0)
-    ft = wp.normalize(vt)*wp.min(kf*wp.length(vt), 0.0 - mu*c*ke) * wp.step(c)
+    ft = compute_friction_force(vt, mu, kf, fn, fd, alpha)
 
     f_total = n * (fn + fd) + ft
     t_total = wp.cross(p, f_total)
@@ -149,10 +150,94 @@ def eval_rigid_contacts_art(
 def compute_normal_force(c: float, ke: float, alpha: float):
     return c * ke
 
+@wp.func
+def compute_damping_force(vn: float, kd: float, c: float, alpha: float):
+    return wp.min(vn, 0.0) * kd * wp.step(c) # * (0.0 - c)
+
+@wp.func
+def compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float, alpha: float):
+    return wp.normalize(vt) * wp.min(kf*wp.length(vt), 0.0 - mu * (fn + fd)) # * wp.step(c)
+
+@wp.func_replay(compute_normal_force)
+def replay_compute_normal_force(c: float, ke: float, alpha: float):
+    return c * ke * alpha
+
+@wp.func_replay(compute_damping_force)
+def replay_compute_damping_force(vn: float, kd: float, c: float, alpha: float):
+    return wp.min(vn, 0.0) * kd * wp.step(c) * alpha
+
+@wp.func_replay(compute_friction_force)
+def replay_compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float, alpha: float):
+    return wp.normalize(vt) * wp.min(kf * alpha * wp.length(vt), 0.0 - mu * (fn + fd))
+
 @wp.func_grad(compute_normal_force)
 def adj_compute_normal_force(c: float, ke: float, alpha: float, adj_ret: float):
+    # backward
     wp.adjoint[c] += ke * adj_ret * alpha
     wp.adjoint[ke] += c * adj_ret
+
+@wp.func_grad(compute_damping_force)
+def adj_compute_damping_force(vn: float, kd: float, c: float, alpha: float, adj_ret: float):
+    # forward
+    var_1 = wp.min(vn, 0.0)
+    var_2 = var_1 * kd * alpha
+    var_3 = wp.step(c)
+    var_4 = var_2 * var_3
+
+    # backward
+    adj_2 = var_3 * adj_ret
+    adj_3 = var_2 * adj_ret
+
+    adj_1 = kd * adj_2
+    wp.adjoint[kd] += var_1 * adj_2
+
+    if (vn < 0.0):
+        wp.adjoint[vn] += adj_1 * alpha
+
+@wp.func_grad(compute_friction_force)
+def adj_compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float, alpha: float, adj_ret: wp.vec3):
+    # forward
+    var_0 = wp.normalize(vt)
+    var_1 = wp.length(vt)
+    var_2 = kf * var_1 * alpha
+    var_3 = 0.0
+    var_4 = fn + fd
+    var_5 = mu * var_4
+    var_6 = var_3 - var_5
+    var_7 = wp.min(var_2, var_6)
+    var_8 = var_0 * var_7
+
+    # backward
+    adj_7 = wp.dot(var_0, adj_ret)
+    adj_0 = var_7 * adj_ret
+
+    if var_2 < var_6:
+        adj_2 = adj_7
+        adj_6 = 0.0
+    else:
+        adj_6 = adj_7
+        adj_2 = 0.0
+
+    adj_3 = adj_6
+    adj_5 = -adj_6
+
+    wp.adjoint[mu] += var_4 * adj_5
+    adj_4 = mu * adj_5
+
+    wp.adjoint[fn] += adj_4
+    wp.adjoint[fd] += adj_4
+
+    wp.adjoint[kf] += var_1 * adj_2
+    adj_1 = kf * adj_2 * alpha
+
+    wp.adjoint[vt] += var_0 * adj_1 # finite checks?
+
+    # norm = var_0
+    # length = var_1
+    if var_1 > 1e-6:
+        invd = 1.0/var_1
+        wp.adjoint[vt] += (adj_0 * invd - var_0 * wp.dot(var_0, adj_0) * invd)
+    
 
 # compute transform across a joint
 @wp.func
@@ -1122,7 +1207,6 @@ class SemiImplicitArticulationIntegrator:
                 ],
                 device=model.device,
                 )
-            
 
         # evaluate joint torques
         wp.launch(
