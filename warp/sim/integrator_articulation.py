@@ -190,9 +190,10 @@ def adj_compute_damping_force(vn: float, kd: float, c: float, alpha: float, adj_
 
     adj_1 = kd * adj_2
     wp.adjoint[kd] += var_1 * adj_2
-
+    adj_vn = 0.0
     if (vn < 0.0):
-        wp.adjoint[vn] += adj_1 * alpha
+        adj_vn = adj_1 * alpha
+    wp.adjoint[vn] += adj_vn
 
 @wp.func_grad(compute_friction_force)
 def adj_compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float, alpha: float, adj_ret: wp.vec3):
