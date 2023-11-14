@@ -260,6 +260,7 @@ class State:
             self.body_f.zero_()
 
         if self.composite_rigid_body_alg:
+            self.body_ft_s_h.zero_()
             self.body_ft_s.zero_()
             self.tmp.zero_()
 
@@ -679,6 +680,8 @@ class Model:
         
         if self.composite_rigid_body_alg:
             # joints
+            s.joint_q_mid = wp.zeros_like(self.joint_q, requires_grad=True)
+
             s.joint_qdd = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.joint_tau = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.joint_S_s = wp.zeros((self.joint_dof_count), dtype=wp.spatial_vectorf, requires_grad=True)            
@@ -691,6 +694,7 @@ class Model:
             s.body_a_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
             s.body_f_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
             s.body_ft_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+            s.body_ft_s_h = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
 
             s.tmp = wp.zeros_like(self.joint_qd, requires_grad=True)
 
