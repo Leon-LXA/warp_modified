@@ -262,9 +262,9 @@ class State:
         if self.composite_rigid_body_alg:
             self.body_ft_s_h.zero_()
             self.body_ft_s.zero_()
-            self.tmp.zero_()
-            self.tmp_inv_m_times_h.zero_()
-            self.TMP.zero_()
+            # self.tmp.zero_()
+            # self.tmp_inv_m_times_h.zero_()
+            # self.TMP.zero_()
 
     def flatten(self):
         wp.utils.warn(
@@ -708,7 +708,7 @@ class Model:
             s.Jc_times_inv_m_times_h = wp.zeros(self.articulation_count*4*3, requires_grad=True)
             s.Jc_qd = wp.zeros(self.articulation_count*4*3, requires_grad=True)
             s.c = wp.zeros(self.articulation_count*4*3, requires_grad=True)
-            s.c_vec = wp.zeros((self.articulation_count,4), dtype=wp.vec3, requires_grad=True)
+            s.c_vec = wp.zeros((self.articulation_count, 4), dtype=wp.vec3, requires_grad=True)
 
             s.tmp_inv_m_times_h = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.TMP = wp.zeros(len(self.joint_qd)*4*3, requires_grad=True)
@@ -4092,6 +4092,7 @@ class ModelBuilder:
                 articulation_Jc_rows = []
                 articulation_Jc_cols = []
                 articulation_G_rows = []
+                articulation_vec_size = []
 
                 articulation_dof_start = []
                 articulation_coord_start = []
@@ -4127,6 +4128,7 @@ class ModelBuilder:
                     articulation_Jc_rows.append(4*3)
                     articulation_Jc_cols.append(dof_count)
                     articulation_G_rows.append(4*3)
+                    articulation_vec_size.append(1)
                     
 
                     m.J_size += 6*joint_count*dof_count
@@ -4150,6 +4152,7 @@ class ModelBuilder:
                 m.articulation_Jc_rows = wp.array(articulation_Jc_rows, dtype=wp.int32)
                 m.articulation_Jc_cols = wp.array(articulation_Jc_cols, dtype=wp.int32)
                 m.articulation_G_rows = wp.array(articulation_G_rows, dtype=wp.int32)
+                m.articulation_vec_size = wp.array(articulation_vec_size, dtype=wp.int32)
 
                 m.articulation_dof_start = wp.array(articulation_dof_start, dtype=wp.int32)
                 m.articulation_coord_start = wp.array(articulation_coord_start, dtype=wp.int32)

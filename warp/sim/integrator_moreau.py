@@ -1060,7 +1060,7 @@ def eval_dense_solve_batched_matrix(
 
 @wp.kernel
 def eval_dense_add_batched(
-    n: int,
+    n: wp.array(dtype=int),
     start: wp.array(dtype=int),
     a: wp.array(dtype=float),
     b: wp.array(dtype=float),
@@ -1068,7 +1068,7 @@ def eval_dense_add_batched(
     c: wp.array(dtype=float),
 ):
     tid = wp.tid()
-    for i in range(0, n):
+    for i in range(0, n[tid]):
         c[start[tid] + i] = a[start[tid] + i] + b[start[tid] + i] * dt
 
 
@@ -1255,9 +1255,9 @@ def dense_J_index(J_start: wp.array(dtype=int), dim_count: int, dof_count: int, 
 def prox_iteration(
     G_mat: wp.array3d(dtype=wp.mat33),
     c_vec: wp.array2d(dtype=wp.vec3),
-    percussion: wp.array2d(dtype=wp.vec3),
     mu: float,
     prox_iter: int,
+    percussion: wp.array2d(dtype=wp.vec3),
 ):
     tid = wp.tid()
 
@@ -1299,7 +1299,7 @@ def prox_iteration(
 @wp.kernel
 def convert_G_to_matrix(
     G_start: wp.array(dtype=int),
-    G_vec: wp.array(dtype=float),
+    G: wp.array(dtype=float),
     G_mat: wp.array3d(dtype=wp.mat33),
 ):
     tid = wp.tid()
@@ -1307,15 +1307,15 @@ def convert_G_to_matrix(
     for i in range(4):
         for j in range(4):
             G_mat[tid, i, j] = wp.mat33(
-                G_vec[dense_G_index(G_start, tid, i, j, 0, 0)],
-                G_vec[dense_G_index(G_start, tid, i, j, 0, 1)],
-                G_vec[dense_G_index(G_start, tid, i, j, 0, 2)],
-                G_vec[dense_G_index(G_start, tid, i, j, 1, 0)],
-                G_vec[dense_G_index(G_start, tid, i, j, 1, 1)],
-                G_vec[dense_G_index(G_start, tid, i, j, 1, 2)],
-                G_vec[dense_G_index(G_start, tid, i, j, 2, 0)],
-                G_vec[dense_G_index(G_start, tid, i, j, 2, 1)],
-                G_vec[dense_G_index(G_start, tid, i, j, 2, 2)],
+                G[dense_G_index(G_start, tid, i, j, 0, 0)],
+                G[dense_G_index(G_start, tid, i, j, 0, 1)],
+                G[dense_G_index(G_start, tid, i, j, 0, 2)],
+                G[dense_G_index(G_start, tid, i, j, 1, 0)],
+                G[dense_G_index(G_start, tid, i, j, 1, 1)],
+                G[dense_G_index(G_start, tid, i, j, 1, 2)],
+                G[dense_G_index(G_start, tid, i, j, 2, 0)],
+                G[dense_G_index(G_start, tid, i, j, 2, 1)],
+                G[dense_G_index(G_start, tid, i, j, 2, 2)],
             )
 
 
@@ -1483,10 +1483,9 @@ class SemiImplicitMoreauIntegrator:
                 model.articulation_J_start,
                 model.articulation_Jc_start,
                 state_in.body_X_sc,
-                state_in.body_v_s,
                 model.rigid_contact_max,
                 model.articulation_count,
-                model.joint_dof_count / model.articulation_count,
+                int(model.joint_dof_count / model.articulation_count),
                 model.rigid_contact_body0,
                 model.rigid_contact_point0,
                 model.shape_geo,
@@ -1517,7 +1516,7 @@ class SemiImplicitMoreauIntegrator:
         matmul_batched(
             model.articulation_count,
             model.articulation_Jc_rows,  # m
-            1,  # n
+            model.articulation_vec_size,  # n
             model.articulation_Jc_cols,  # intermediate dim
             0,
             0,
@@ -1534,7 +1533,7 @@ class SemiImplicitMoreauIntegrator:
         matmul_batched(
             model.articulation_count,
             model.articulation_Jc_rows,  # m
-            1,  # n
+            model.articulation_vec_size,  # n
             model.articulation_Jc_cols,  # intermediate dim
             0,
             0,
@@ -1567,13 +1566,13 @@ class SemiImplicitMoreauIntegrator:
             kernel=eval_dense_solve_batched_matrix,
             dim=model.articulation_count,
             inputs=[
-                model.joint_dof_count / model.articulation_count,
+                int(model.joint_dof_count / model.articulation_count),
                 model.articulation_Jc_start,
                 model.articulation_H_start,
                 model.articulation_H_rows,
                 model.H,
                 model.L,
-                model.J_c,
+                model.Jc,
                 state_out.TMP,  # tmp not needed ?
             ],
             outputs=[model.Inv_M_times_Jc_t],
@@ -1603,7 +1602,6 @@ class SemiImplicitMoreauIntegrator:
             dim=model.articulation_count,
             inputs=[
                 model.articulation_G_start,
-                model.articulation_G_rows,
                 model.G,
             ],
             outputs=[model.G_mat],
@@ -1639,11 +1637,10 @@ class SemiImplicitMoreauIntegrator:
             kernel=p_to_f_s,
             dim=model.articulation_count,
             inputs=[
-                model.articulation_start,
-                model.rigid_contact_max,
-                model.rigid_contact_body0,
-                model.rigid_contact_point0,
+                model.c_body_vec,
+                model.point_vec,
                 state_in.percussion,
+                dt,
             ],
             outputs=[state_in.body_f_s],
             device=model.device,
@@ -1738,6 +1735,7 @@ class SemiImplicitMoreauIntegrator:
             kernel=eval_rigid_id,
             dim=model.articulation_count,
             inputs=[
+                model.articulation_start,  # now, originally articulation_joint_start
                 model.joint_type,
                 model.joint_parent,
                 model.joint_q_start,
