@@ -263,6 +263,8 @@ class State:
             self.body_ft_s_h.zero_()
             self.body_ft_s.zero_()
             self.tmp.zero_()
+            self.tmp_inv_m_times_h.zero_()
+            self.TMP.zero_()
 
     def flatten(self):
         wp.utils.warn(
@@ -680,8 +682,6 @@ class Model:
         
         if self.composite_rigid_body_alg:
             # joints
-            s.joint_q_mid = wp.zeros_like(self.joint_q, requires_grad=True)
-
             s.joint_qdd = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.joint_tau = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.joint_S_s = wp.zeros((self.joint_dof_count), dtype=wp.spatial_vectorf, requires_grad=True)            
@@ -694,9 +694,24 @@ class Model:
             s.body_a_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
             s.body_f_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
             s.body_ft_s = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
-            s.body_ft_s_h = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
 
             s.tmp = wp.zeros_like(self.joint_qd, requires_grad=True)
+
+            # rigid contact data
+            s.joint_q_mid = wp.zeros_like(self.joint_q, requires_grad=True)
+
+            s.body_ft_s_h = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
+            s.percussion = wp.zeros((self.articulation_count, 4), dtype=wp.vec3, requires_grad=True)
+            
+            # compute G and c
+            s.inv_m_times_h = wp.zeros_like(self.joint_qd, requires_grad=True) # maybe set to 0?
+            s.Jc_times_inv_m_times_h = wp.zeros(self.articulation_count*4*3, requires_grad=True)
+            s.Jc_qd = wp.zeros(self.articulation_count*4*3, requires_grad=True)
+            s.c = wp.zeros(self.articulation_count*4*3, requires_grad=True)
+            s.c_vec = wp.zeros((self.articulation_count,4), dtype=wp.vec3, requires_grad=True)
+
+            s.tmp_inv_m_times_h = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.TMP = wp.zeros(len(self.joint_qd)*4*3, requires_grad=True)
 
         return s
 
@@ -717,6 +732,10 @@ class Model:
             self.P = wp.empty(self.J_size, dtype=wp.float32, requires_grad=True)
             self.H = wp.empty(self.H_size, dtype=wp.float32, requires_grad=True)
             self.L = wp.zeros(self.H_size, dtype=wp.float32,requires_grad=True)
+            self.Jc = wp.zeros(self.Jc_size, dtype=wp.float32, requires_grad=True)
+            self.Inv_M_times_Jc_t = wp.zeros(self.Jc_size, dtype=wp.float32, requires_grad=True)
+            self.G = wp.zeros(self.G_size, dtype=wp.float32, requires_grad=True)
+            self.G_mat = wp.zeros((self.articulation_count,4,4), dtype=wp.mat33, requires_grad=True)
 
     def find_shape_contact_pairs(self):
         # find potential contact pairs based on collision groups and collision mask (pairwise filtering)
@@ -859,6 +878,10 @@ class Model:
         self.rigid_contact_inv_weight_prev = wp.zeros(
             len(self.body_q), dtype=wp.float32, device=self.device, requires_grad=requires_grad
         )
+        # contact bodies of quadruped feet
+        self.c_body_vec = wp.zeros(self.articulation_count*4, dtype=wp.int32, device=self.device)
+        # contact points of quadruped feet
+        self.point_vec = wp.zeros(self.articulation_count*4, dtype=wp.vec3, device=self.device)
 
     def flatten(self):
         """Returns a list of Tensors stored by the model
@@ -4053,15 +4076,22 @@ class ModelBuilder:
                 m.J_size = 0
                 m.M_size = 0
                 m.H_size = 0
+                m.Jc_size = 0
+                m.G_size = 0
 
                 articulation_J_start = []
                 articulation_M_start = []
                 articulation_H_start = []
+                articulation_Jc_start = []
+                articulation_G_start = []
 
                 articulation_M_rows = []
                 articulation_H_rows = []
                 articulation_J_rows = []
                 articulation_J_cols = []
+                articulation_Jc_rows = []
+                articulation_Jc_cols = []
+                articulation_G_rows = []
 
                 articulation_dof_start = []
                 articulation_coord_start = []
@@ -4084,6 +4114,8 @@ class ModelBuilder:
                     articulation_J_start.append(m.J_size)
                     articulation_M_start.append(m.M_size)
                     articulation_H_start.append(m.H_size)
+                    articulation_Jc_start.append(m.Jc_size)
+                    articulation_G_start.append(m.G_size)
                     articulation_dof_start.append(first_dof)
                     articulation_coord_start.append(first_coord)
 
@@ -4092,21 +4124,32 @@ class ModelBuilder:
                     articulation_H_rows.append(dof_count)
                     articulation_J_rows.append(joint_count*6)
                     articulation_J_cols.append(dof_count)
+                    articulation_Jc_rows.append(4*3)
+                    articulation_Jc_cols.append(dof_count)
+                    articulation_G_rows.append(4*3)
+                    
 
                     m.J_size += 6*joint_count*dof_count
                     m.M_size += 6*joint_count*6*joint_count
                     m.H_size += dof_count*dof_count
-                    
+                    m.Jc_size += dof_count*4*3 # assuming 4 contacts per articulation
+                    m.G_size += 4*3*4*3
+
 
                 # matrix offsets for batched gemm
                 m.articulation_J_start = wp.array(articulation_J_start, dtype=wp.int32)
                 m.articulation_M_start = wp.array(articulation_M_start, dtype=wp.int32)
                 m.articulation_H_start = wp.array(articulation_H_start, dtype=wp.int32)
+                m.articulation_Jc_start = wp.array(articulation_Jc_start, dtype=wp.int32)
+                m.articulation_G_start = wp.array(articulation_G_start, dtype=wp.int32)
                 
                 m.articulation_M_rows = wp.array(articulation_M_rows, dtype=wp.int32)
                 m.articulation_H_rows = wp.array(articulation_H_rows, dtype=wp.int32)
                 m.articulation_J_rows = wp.array(articulation_J_rows, dtype=wp.int32)
                 m.articulation_J_cols = wp.array(articulation_J_cols, dtype=wp.int32)
+                m.articulation_Jc_rows = wp.array(articulation_Jc_rows, dtype=wp.int32)
+                m.articulation_Jc_cols = wp.array(articulation_Jc_cols, dtype=wp.int32)
+                m.articulation_G_rows = wp.array(articulation_G_rows, dtype=wp.int32)
 
                 m.articulation_dof_start = wp.array(articulation_dof_start, dtype=wp.int32)
                 m.articulation_coord_start = wp.array(articulation_coord_start, dtype=wp.int32)
