@@ -4095,6 +4095,8 @@ class ModelBuilder:
 
                 articulation_dof_start = []
                 articulation_coord_start = []
+                articulation_contact_dim_start = []
+                first_contact_dim = 0
 
                 for i in range(m.articulation_count):
 
@@ -4118,6 +4120,7 @@ class ModelBuilder:
                     articulation_G_start.append(m.G_size)
                     articulation_dof_start.append(first_dof)
                     articulation_coord_start.append(first_coord)
+                    articulation_contact_dim_start.append(first_contact_dim)
 
                     # bit of data duplication here, but will leave it as such for clarity
                     articulation_M_rows.append(joint_count*6)
@@ -4135,6 +4138,8 @@ class ModelBuilder:
                     m.H_size += dof_count*dof_count
                     m.Jc_size += dof_count*4*3 # assuming 4 contacts per articulation
                     m.G_size += 4*3*4*3
+
+                    first_contact_dim += 4*3
 
 
                 # matrix offsets for batched gemm
@@ -4155,6 +4160,7 @@ class ModelBuilder:
 
                 m.articulation_dof_start = wp.array(articulation_dof_start, dtype=wp.int32)
                 m.articulation_coord_start = wp.array(articulation_coord_start, dtype=wp.int32)
+                m.articulation_contact_dim_start = wp.array(articulation_contact_dim_start, dtype=wp.int32)
 
                 m.alloc_mass_matrix()
 

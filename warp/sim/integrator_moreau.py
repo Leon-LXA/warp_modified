@@ -1032,9 +1032,7 @@ def construct_contact_jacobian(
         c_dist = geo.thickness[c_shape]
 
         if (c_body - tid) % 3 == 0 and i % 2 == 0:  # only consider foot contacts
-
             X_s = body_X_sc[c_body]
-
             n = wp.vec3(0.0, 1.0, 0.0)
             # transform point to world space
             p = (
@@ -1049,10 +1047,12 @@ def construct_contact_jacobian(
                 for j in range(0, 3):  # iterate all contact dofs
                     for k in range(0, dof_count):  # iterate all joint dofs
                         Jc[dense_J_index(Jc_start, 3, dof_count, tid, foot_id, j, k)] = (
-                            J[dense_J_index(J_start, 6, dof_count, tid, c_body, j+3, k)]
-                            - p_skew[j, 0] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 0, k)]
-                            - p_skew[j, 1] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 1, k)]
-                            - p_skew[j, 2] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 2, k)]
+                            J[
+                                dense_J_index(J_start, 6, dof_count, 0, c_body, j + 3, k)
+                            ]  # tid is 0 because c_body already iterates over full J
+                            - p_skew[j, 0] * J[dense_J_index(J_start, 6, dof_count, 0, c_body, 0, k)]
+                            - p_skew[j, 1] * J[dense_J_index(J_start, 6, dof_count, 0, c_body, 1, k)]
+                            - p_skew[j, 2] * J[dense_J_index(J_start, 6, dof_count, 0, c_body, 2, k)]
                         )
 
             c_body_vec[tid * 4 + foot_id] = c_body
@@ -1109,11 +1109,11 @@ def prox_iteration(
 
             # update percussion
             p[i] = p[i] - r * (sum + c[i])
-          
+
             # projection to friction cone
             if p[i][1] < 0.0:
                 p[i] = wp.vec3(0.0, 0.0, 0.0)
-            fm = wp.sqrt(p[i][0] ** 2.0 + p[i][2] ** 2.0)   # friction magnitude
+            fm = wp.sqrt(p[i][0] ** 2.0 + p[i][2] ** 2.0)  # friction magnitude
             if mu * p[i][1] < fm:
                 p[i] = wp.vec3(p[i][0] * mu * p[i][1] / fm, p[i][1], p[i][2] * mu * p[i][1] / fm)
 
@@ -1323,7 +1323,7 @@ class SemiImplicitMoreauIntegrator:
             0,
             model.articulation_Jc_start,
             model.articulation_dof_start,
-            model.articulation_dof_start,
+            model.articulation_contact_dim_start,
             model.Jc,
             state_in.inv_m_times_h,
             state_in.Jc_times_inv_m_times_h,
@@ -1340,7 +1340,7 @@ class SemiImplicitMoreauIntegrator:
             0,
             model.articulation_Jc_start,
             model.articulation_dof_start,
-            model.articulation_dof_start,
+            model.articulation_contact_dim_start,
             model.Jc,
             state_in.joint_qd,
             state_in.Jc_qd,
@@ -1353,7 +1353,7 @@ class SemiImplicitMoreauIntegrator:
             dim=model.articulation_count,
             inputs=[
                 model.articulation_Jc_rows,
-                model.articulation_dof_start,
+                model.articulation_contact_dim_start,
                 state_in.Jc_qd,
                 state_in.Jc_times_inv_m_times_h,
                 dt,
