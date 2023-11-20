@@ -262,9 +262,8 @@ class State:
         if self.composite_rigid_body_alg:
             self.body_ft_s_h.zero_()
             self.body_ft_s.zero_()
-            # self.tmp.zero_()
-            # self.tmp_inv_m_times_h.zero_()
-            # self.TMP.zero_()
+            self.tmp.zero_()
+            self.tmp_inv_m_times_h.zero_()
 
     def flatten(self):
         wp.utils.warn(
@@ -711,7 +710,6 @@ class Model:
             s.c_vec = wp.zeros((self.articulation_count, 4), dtype=wp.vec3, requires_grad=True)
 
             s.tmp_inv_m_times_h = wp.zeros_like(self.joint_qd, requires_grad=True)
-            s.TMP = wp.zeros(len(self.joint_qd)*4*3, requires_grad=True)
 
         return s
 
@@ -736,6 +734,7 @@ class Model:
             self.Inv_M_times_Jc_t = wp.zeros(self.Jc_size, dtype=wp.float32, requires_grad=True)
             self.G = wp.zeros(self.G_size, dtype=wp.float32, requires_grad=True)
             self.G_mat = wp.zeros((self.articulation_count,4,4), dtype=wp.mat33, requires_grad=True)
+            self.TMP = wp.zeros(self.Jc_size, requires_grad=True)
 
     def find_shape_contact_pairs(self):
         # find potential contact pairs based on collision groups and collision mask (pairwise filtering)

@@ -68,185 +68,6 @@ def spatial_transform_inertia(t: wp.transform, I: wp.spatial_matrix):
     return wp.mul(wp.mul(wp.transpose(T), I), T)
 
 
-@wp.kernel
-def eval_rigid_contacts_art(
-    contact_count: wp.array(dtype=int),
-    body_X_s: wp.array(dtype=wp.transform),
-    body_v_s: wp.array(dtype=wp.spatial_vector),
-    contact_body: wp.array(dtype=int),
-    contact_point: wp.array(dtype=wp.vec3),
-    contact_shape: wp.array(dtype=int),
-    shape_materials: ModelShapeMaterials,
-    geo: ModelShapeGeometry,
-    alpha: float,
-    body_f_s: wp.array(dtype=wp.spatial_vector),
-):
-    tid = wp.tid()
-
-    count = contact_count[0]
-    if tid >= count:
-        return
-
-    c_body = contact_body[tid]
-    c_point = contact_point[tid]
-    c_shape = contact_shape[tid]
-    c_dist = geo.thickness[c_shape]
-
-    # hard coded surface parameter tensor layout (ke, kd, kf, mu)
-    ke = shape_materials.ke[c_shape]
-    kd = shape_materials.kd[c_shape]
-    kf = shape_materials.kf[c_shape]
-    mu = shape_materials.mu[c_shape]
-
-    X_s = body_X_s[c_body]  # position of colliding body
-    v_s = body_v_s[c_body]  # orientation of colliding body
-
-    n = wp.vec3(0.0, 1.0, 0.0)
-
-    # transform point to world space
-    p = wp.transform_point(X_s, c_point) - n * c_dist  # add on 'thickness' of shape, e.g.: radius of sphere/capsule
-
-    w = wp.spatial_top(v_s)
-    v = wp.spatial_bottom(v_s)
-
-    # contact point velocity
-    dpdt = v + wp.cross(w, p)  # why is this correct? yes because v and w are in spatial frame
-
-    # check ground contact
-    c = wp.dot(n, p)  # check if we're inside the ground
-
-    if c >= 0.0:
-        return
-
-    vn = wp.dot(n, dpdt)  # velocity component out of the ground
-    vt = dpdt - n * vn  # velocity component not into the ground
-
-    fn = compute_normal_force(c, ke, alpha)  # normal force (restitution coefficient * how far inside for ground)
-
-    # contact damping
-    fd = compute_damping_force(vn, kd, c, alpha)
-
-    # viscous friction
-    # ft = vt*kf
-
-    # Coulomb friction (box)
-    # lower = mu * (fn + fd)   # negative
-    # upper = 0.0 - lower      # positive, workaround for no unary ops
-
-    # vx = wp.clamp(wp.dot(wp.vec3(kf, 0.0, 0.0), vt), lower, upper)
-    # vz = wp.clamp(wp.dot(wp.vec3(0.0, 0.0, kf), vt), lower, upper)
-
-    # Coulomb friction (smooth, but gradients are numerically unstable around |vt| = 0)
-    ft = compute_friction_force(vt, mu, kf, fn, fd, alpha)
-
-    f_total = n * (fn + fd) + ft
-    t_total = wp.cross(p, f_total)
-
-    wp.atomic_add(body_f_s, c_body, wp.spatial_vector(t_total, f_total))
-
-
-@wp.func
-def compute_normal_force(c: float, ke: float, alpha: float):
-    return c * ke
-
-
-@wp.func
-def compute_damping_force(vn: float, kd: float, c: float, alpha: float):
-    return wp.min(vn, 0.0) * kd * wp.step(c)  # * (0.0 - c)
-
-
-@wp.func
-def compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float, alpha: float):
-    return wp.normalize(vt) * wp.min(kf * wp.length(vt), 0.0 - mu * (fn + fd))  # * wp.step(c)
-
-
-@wp.func_replay(compute_normal_force)
-def replay_compute_normal_force(c: float, ke: float, alpha: float):
-    return c * ke * alpha
-
-
-@wp.func_replay(compute_damping_force)
-def replay_compute_damping_force(vn: float, kd: float, c: float, alpha: float):
-    return wp.min(vn, 0.0) * kd * wp.step(c) * alpha
-
-
-@wp.func_replay(compute_friction_force)
-def replay_compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float, alpha: float):
-    return wp.normalize(vt) * wp.min(kf * alpha * wp.length(vt), 0.0 - mu * (fn + fd))
-
-
-@wp.func_grad(compute_normal_force)
-def adj_compute_normal_force(c: float, ke: float, alpha: float, adj_ret: float):
-    # backward
-    wp.adjoint[c] += ke * adj_ret * alpha
-    wp.adjoint[ke] += c * adj_ret
-
-
-@wp.func_grad(compute_damping_force)
-def adj_compute_damping_force(vn: float, kd: float, c: float, alpha: float, adj_ret: float):
-    # forward
-    var_1 = wp.min(vn, 0.0)
-    var_2 = var_1 * kd * alpha
-    var_3 = wp.step(c)
-    var_4 = var_2 * var_3
-
-    # backward
-    adj_2 = var_3 * adj_ret
-    adj_3 = var_2 * adj_ret
-
-    adj_1 = kd * adj_2
-    wp.adjoint[kd] += var_1 * adj_2
-    adj_vn = 0.0
-    if vn < 0.0:
-        adj_vn = adj_1 * alpha
-    wp.adjoint[vn] += adj_vn
-
-
-@wp.func_grad(compute_friction_force)
-def adj_compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float, alpha: float, adj_ret: wp.vec3):
-    # forward
-    var_0 = wp.normalize(vt)
-    var_1 = wp.length(vt)
-    var_2 = kf * var_1 * alpha
-    var_3 = 0.0
-    var_4 = fn + fd
-    var_5 = mu * var_4
-    var_6 = var_3 - var_5
-    var_7 = wp.min(var_2, var_6)
-    var_8 = var_0 * var_7
-
-    # backward
-    adj_7 = wp.dot(var_0, adj_ret)
-    adj_0 = var_7 * adj_ret
-
-    if var_2 < var_6:
-        adj_2 = adj_7
-        adj_6 = 0.0
-    else:
-        adj_6 = adj_7
-        adj_2 = 0.0
-
-    adj_3 = adj_6
-    adj_5 = -adj_6
-
-    wp.adjoint[mu] += var_4 * adj_5
-    adj_4 = mu * adj_5
-
-    wp.adjoint[fn] += adj_4
-    wp.adjoint[fd] += adj_4
-
-    wp.adjoint[kf] += var_1 * adj_2
-    adj_1 = kf * adj_2 * alpha
-
-    wp.adjoint[vt] += var_0 * adj_1  # finite checks?
-
-    # norm = var_0
-    # length = var_1
-    if var_1 > 1e-6:
-        invd = 1.0 / var_1
-        wp.adjoint[vt] += adj_0 * invd - var_0 * wp.dot(var_0, adj_0) * invd
-
-
 # compute transform across a joint
 @wp.func
 def jcalc_transform(type: int, axis: wp.vec3, joint_q: wp.array(dtype=float), start: int):
@@ -1052,10 +873,12 @@ def eval_dense_solve_batched_matrix(
     X: wp.array(dtype=float),
 ):
     tid = wp.tid()
+    start = b_start[tid]
     # Jc is transposed so vectorization helps us here
     for i in range(0, 4 * 3):  # assuming 4 contacts per articulation
         wp.dense_solve_batched(b_start, A_start, A_dim, A, L, B, TMP, X)
         b_start[tid] = b_start[tid] + dof_count
+    b_start[tid] = start
 
 
 @wp.kernel
@@ -1190,6 +1013,7 @@ def construct_contact_jacobian(
     dof_count: int,
     contact_body: wp.array(dtype=int),
     contact_point: wp.array(dtype=wp.vec3),
+    contact_shape: wp.array(dtype=int),
     geo: ModelShapeGeometry,
     Jc: wp.array(dtype=float),
     c_body_vec: wp.array(dtype=int),
@@ -1200,13 +1024,15 @@ def construct_contact_jacobian(
     contacts_per_articulation = rigid_contact_max / articulation_count
     foot_id = int(0)
 
-    for i in range(0, contacts_per_articulation):  # iterate all contacts
-        contact_id = tid * contacts_per_articulation - 1 + i
+    for i in range(2, contacts_per_articulation):  # iterate (almost) all contacts
+        contact_id = tid * contacts_per_articulation + i
         c_body = contact_body[contact_id]
         c_point = contact_point[contact_id]
-        c_dist = geo.thickness[contact_id]
+        c_shape = contact_shape[contact_id]
+        c_dist = geo.thickness[c_shape]
 
-        if c_body - tid % 3 == 0 and i % 2 == 0:  # only consider foot contacts
+        if (c_body - tid) % 3 == 0 and i % 2 == 0:  # only consider foot contacts
+
             X_s = body_X_sc[c_body]
 
             n = wp.vec3(0.0, 1.0, 0.0)
@@ -1214,20 +1040,19 @@ def construct_contact_jacobian(
             p = (
                 wp.transform_point(X_s, c_point) - n * c_dist
             )  # add on 'thickness' of shape, e.g.: radius of sphere/capsule
+            p_skew = wp.skew(wp.vec3(p[0], p[1], p[2]))
             # check ground contact
             c = wp.dot(n, p)
-
-            p_skew = wp.skew(wp.vec3(p[0], p[1], p[2]))
 
             if c <= 0.0:
                 # Jc = J_p - skew(p)*J_r
                 for j in range(0, 3):  # iterate all contact dofs
                     for k in range(0, dof_count):  # iterate all joint dofs
                         Jc[dense_J_index(Jc_start, 3, dof_count, tid, foot_id, j, k)] = (
-                            J[dense_J_index(J_start, 6, dof_count, tid, c_body, j, k)]
-                            - p_skew[j, 0] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 3, k)]
-                            - p_skew[j, 1] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 4, k)]
-                            - p_skew[j, 2] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 5, k)]
+                            J[dense_J_index(J_start, 6, dof_count, tid, c_body, j+3, k)]
+                            - p_skew[j, 0] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 0, k)]
+                            - p_skew[j, 1] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 1, k)]
+                            - p_skew[j, 2] * J[dense_J_index(J_start, 6, dof_count, tid, c_body, 2, k)]
                         )
 
             c_body_vec[tid * 4 + foot_id] = c_body
@@ -1248,7 +1073,7 @@ def dense_J_index(J_start: wp.array(dtype=int), dim_count: int, dof_count: int, 
     k: joint velocity
     """
 
-    return J_start[tid] + i * dim_count + j * dof_count + k  # articulation, body/contact, dim, dof
+    return J_start[tid] + i * dim_count * dof_count + j * dof_count + k  # articulation, body/contact, dim, dof
 
 
 @wp.kernel
@@ -1268,8 +1093,8 @@ def prox_iteration(
     # initialize percussions with steady state
     for i in range(4):
         p[i] = -wp.inverse(G[i, i]) * c[i]
-        # overwrite percussions with steady state only in normal direction
-        p[i] = wp.vec3(0.0, p[i][1], 0.0)
+        # # overwrite percussions with steady state only in normal direction
+        # p[i] = wp.vec3(0.0, p[i][1], 0.0)
 
     # solve percussions iteratively
     for it in range(prox_iter):
@@ -1277,21 +1102,18 @@ def prox_iteration(
             # calculate sum(G_ij*p_j) and sum over det(G_ij)
             sum = wp.vec3(0.0, 0.0, 0.0)
             r_sum = 0.0
-
             for j in range(4):
                 sum += G[i, j] * p[j]
                 r_sum += wp.determinant(G[i, j])
-
             r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
             # update percussion
             p[i] = p[i] - r * (sum + c[i])
-
+          
             # projection to friction cone
             if p[i][1] < 0.0:
                 p[i] = wp.vec3(0.0, 0.0, 0.0)
-            # friction magnitude
-            fm = wp.sqrt(p[i][0] ** 2.0 + p[i][2] ** 2.0)
+            fm = wp.sqrt(p[i][0] ** 2.0 + p[i][2] ** 2.0)   # friction magnitude
             if mu * p[i][1] < fm:
                 p[i] = wp.vec3(p[i][0] * mu * p[i][1] / fm, p[i][1], p[i][2] * mu * p[i][1] / fm)
 
@@ -1356,7 +1178,7 @@ def p_to_f_s(
     p = percussion[tid]
 
     for i in range(4):
-        f = p[i] / dt
+        f = -p[i] / dt
         t = wp.cross(point_vec[tid * 4 + i], f)
         wp.atomic_add(body_f_s, c_body_vec[tid * 4 + i], wp.spatial_vector(t, f))
 
@@ -1473,27 +1295,6 @@ class SemiImplicitMoreauIntegrator:
             device=model.device,
         )
 
-        # construct J_c
-        # do this in eval_mass_matrix, assume no switching
-        wp.launch(
-            kernel=construct_contact_jacobian,
-            dim=model.articulation_count,
-            inputs=[
-                model.J,
-                model.articulation_J_start,
-                model.articulation_Jc_start,
-                state_in.body_X_sc,
-                model.rigid_contact_max,
-                model.articulation_count,
-                int(model.joint_dof_count / model.articulation_count),
-                model.rigid_contact_body0,
-                model.rigid_contact_point0,
-                model.shape_geo,
-            ],
-            outputs=[model.Jc, model.c_body_vec, model.point_vec],
-            device=model.device,
-        )
-
         # find c
         # solve for x (x = H^-1*h(tau))
         wp.launch(
@@ -1546,53 +1347,18 @@ class SemiImplicitMoreauIntegrator:
             device=model.device,
         )
 
-        # compute Jc*qd + Jc*(H^-1*h(tau))
+        # compute Jc*qd + Jc*(H^-1*h(tau)) * dt
         wp.launch(
             kernel=eval_dense_add_batched,
             dim=model.articulation_count,
             inputs=[
                 model.articulation_Jc_rows,
                 model.articulation_dof_start,
-                state_in.Jc_times_inv_m_times_h,
                 state_in.Jc_qd,
+                state_in.Jc_times_inv_m_times_h,
                 dt,
             ],
             outputs=[state_in.c],
-            device=model.device,
-        )
-
-        # solve for X (X = H^-1*Jc^T) can also be done in eval_mass_matrix
-        wp.launch(
-            kernel=eval_dense_solve_batched_matrix,
-            dim=model.articulation_count,
-            inputs=[
-                int(model.joint_dof_count / model.articulation_count),
-                model.articulation_Jc_start,
-                model.articulation_H_start,
-                model.articulation_H_rows,
-                model.H,
-                model.L,
-                model.Jc,
-                state_out.TMP,  # tmp not needed ?
-            ],
-            outputs=[model.Inv_M_times_Jc_t],
-            device=model.device,
-        )
-
-        # compute G = Jc*(H^-1*Jc^T)
-        matmul_batched(
-            model.articulation_count,
-            model.articulation_Jc_rows,  # m
-            model.articulation_Jc_rows,  # n
-            model.articulation_Jc_cols,  # intermediate dim
-            0,
-            1,  # Is this correct?
-            model.articulation_Jc_start,
-            model.articulation_Jc_start,  # What do we need here?
-            model.articulation_G_start,
-            model.Jc,
-            model.Inv_M_times_Jc_t,
-            model.G,
             device=model.device,
         )
 
@@ -1849,5 +1615,62 @@ class SemiImplicitMoreauIntegrator:
             dim=model.articulation_count,
             inputs=[model.articulation_H_start, model.articulation_H_rows, model.H, model.joint_armature],
             outputs=[model.L],
+            device=model.device,
+        )
+
+        # construct J_c
+        # assume no contact switches in time step
+        wp.launch(
+            kernel=construct_contact_jacobian,
+            dim=model.articulation_count,
+            inputs=[
+                model.J,
+                model.articulation_J_start,
+                model.articulation_Jc_start,
+                state_in.body_X_sc,
+                model.rigid_contact_max,
+                model.articulation_count,
+                int(model.joint_dof_count / model.articulation_count),
+                model.rigid_contact_body0,
+                model.rigid_contact_point0,
+                model.rigid_contact_shape0,
+                model.shape_geo,
+            ],
+            outputs=[model.Jc, model.c_body_vec, model.point_vec],
+            device=model.device,
+        )
+
+        # solve for X^T (X = H^-1*Jc^T) can also be done in eval_mass_matrix
+        wp.launch(
+            kernel=eval_dense_solve_batched_matrix,
+            dim=model.articulation_count,
+            inputs=[
+                int(model.joint_dof_count / model.articulation_count),
+                model.articulation_Jc_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                model.Jc,
+                model.TMP,
+            ],
+            outputs=[model.Inv_M_times_Jc_t],
+            device=model.device,
+        )
+
+        # compute G = Jc*(H^-1*Jc^T)
+        matmul_batched(
+            model.articulation_count,
+            model.articulation_Jc_rows,  # m
+            model.articulation_Jc_rows,  # n
+            model.articulation_Jc_cols,  # intermediate dim
+            0,
+            1,
+            model.articulation_Jc_start,
+            model.articulation_Jc_start,
+            model.articulation_G_start,
+            model.Jc,
+            model.Inv_M_times_Jc_t,
+            model.G,
             device=model.device,
         )
