@@ -857,10 +857,10 @@ def broadphase_collision_pairs(
             print("Number of rigid contacts exceeded limit. Increase Model.rigid_contact_max.")
             return
         # allocate contact points
-        for i in range(num_contacts):
-            contact_shape0[index + i] = actual_shape_a
-            contact_shape1[index + i] = actual_shape_b
-            contact_point_id[index + i] = i
+        for i in range(num_contacts):   # modified to always have the same order for Jc
+            contact_shape0[tid*2 + i] = actual_shape_a
+            contact_shape1[tid*2 + i] = actual_shape_b
+            contact_point_id[tid*2 + i] = i
 
 
 @wp.kernel
