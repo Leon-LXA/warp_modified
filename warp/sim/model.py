@@ -260,7 +260,6 @@ class State:
             self.body_f.zero_()
 
         if self.composite_rigid_body_alg:
-            self.body_ft_s_h.zero_()
             self.body_ft_s.zero_()
             self.tmp.zero_()
             self.tmp_inv_m_times_h.zero_()
