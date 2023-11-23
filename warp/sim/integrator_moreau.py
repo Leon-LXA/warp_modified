@@ -1194,7 +1194,7 @@ class SemiImplicitMoreauIntegrator:
     def __init__(self):
         pass
 
-    def simulate(self, model, state_in, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10):
+    def simulate(self, model, state_in, state_mid, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10):
         # integrate position with euler half a step
         wp.launch(
             kernel=integrate_q_halfstep,
@@ -1208,7 +1208,7 @@ class SemiImplicitMoreauIntegrator:
                 dt,
             ],
             outputs=[
-                state_in.joint_q_mid,
+                state_mid.joint_q,
             ],
             device=model.device,
         )
@@ -1223,12 +1223,12 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_parent,
                 model.joint_q_start,
                 model.joint_qd_start,
-                state_in.joint_q_mid,
+                state_mid.joint_q,
                 model.joint_X_p,  # now, originally joint_X_pj
                 model.joint_X_cm,
                 model.joint_axis,
             ],
-            outputs=[state_in.body_X_sc, state_in.body_X_sm],
+            outputs=[state_mid.body_X_sc, state_mid.body_X_sm],
             device=model.device,
         )
 
@@ -1242,30 +1242,30 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_parent,
                 model.joint_q_start,
                 model.joint_qd_start,
-                state_in.joint_q_mid,
+                state_mid.joint_q,
                 state_in.joint_qd,
                 model.joint_axis,
                 model.joint_target_ke,
                 model.joint_target_kd,
                 model.body_I_m,
-                state_in.body_X_sc,
-                state_in.body_X_sm,
+                state_mid.body_X_sc,
+                state_mid.body_X_sm,
                 model.joint_X_p,  # now, originally joint_X_pj
                 model.gravity,
             ],
             outputs=[
-                state_in.joint_S_s,
-                state_in.body_I_s,
-                state_in.body_v_s,
-                state_in.body_f_s,
-                state_in.body_a_s,
+                state_mid.joint_S_s,
+                state_mid.body_I_s,
+                state_mid.body_v_s,
+                state_mid.body_f_s,
+                state_mid.body_a_s,
             ],
             device=model.device,
         )
 
         # eval mass matrix
         if update_mass_matrix:
-            self.eval_mass_matrix(model, state_in)
+            self.eval_mass_matrix(model, state_mid)
 
         # eval_tau (tau will be h)
         wp.launch(
@@ -1277,7 +1277,7 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_parent,
                 model.joint_q_start,
                 model.joint_qd_start,
-                state_in.joint_q_mid,
+                state_mid.joint_q,
                 state_in.joint_qd,
                 model.joint_act,
                 model.joint_target,
@@ -1288,10 +1288,10 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_limit_ke,
                 model.joint_limit_kd,
                 model.joint_axis,
-                state_in.joint_S_s,
+                state_mid.joint_S_s,
                 state_in.body_f_s,
             ],
-            outputs=[state_in.body_ft_s_h, state_in.joint_tau],
+            outputs=[state_mid.body_ft_s, state_mid.joint_tau],
             device=model.device,
         )
 
@@ -1306,10 +1306,10 @@ class SemiImplicitMoreauIntegrator:
                 model.articulation_H_rows,
                 model.H,
                 model.L,
-                state_in.joint_tau,
-                state_in.tmp_inv_m_times_h,
+                state_mid.joint_tau,
+                state_mid.tmp_inv_m_times_h,
             ],
-            outputs=[state_in.inv_m_times_h],
+            outputs=[state_mid.inv_m_times_h],
             device=model.device,
         )
 
@@ -1325,8 +1325,8 @@ class SemiImplicitMoreauIntegrator:
             model.articulation_dof_start,
             model.articulation_contact_dim_start,
             model.Jc,
-            state_in.inv_m_times_h,
-            state_in.Jc_times_inv_m_times_h,
+            state_mid.inv_m_times_h,
+            state_mid.Jc_times_inv_m_times_h,
             device=model.device,
         )
 
@@ -1343,7 +1343,7 @@ class SemiImplicitMoreauIntegrator:
             model.articulation_contact_dim_start,
             model.Jc,
             state_in.joint_qd,
-            state_in.Jc_qd,
+            state_mid.Jc_qd,
             device=model.device,
         )
 
@@ -1354,33 +1354,22 @@ class SemiImplicitMoreauIntegrator:
             inputs=[
                 model.articulation_Jc_rows,
                 model.articulation_contact_dim_start,
-                state_in.Jc_qd,
-                state_in.Jc_times_inv_m_times_h,
+                state_mid.Jc_qd,
+                state_mid.Jc_times_inv_m_times_h,
                 dt,
             ],
-            outputs=[state_in.c],
+            outputs=[state_mid.c],
             device=model.device,
         )
 
-        # convert G and c to matrix/vector arrays
-        wp.launch(
-            kernel=convert_G_to_matrix,
-            dim=model.articulation_count,
-            inputs=[
-                model.articulation_G_start,
-                model.G,
-            ],
-            outputs=[model.G_mat],
-            device=model.device,
-        )
-
+        # convert c to matrix/vector arrays
         wp.launch(
             kernel=convert_c_to_vector,
             dim=model.articulation_count,
             inputs=[
-                state_in.c,
+                state_mid.c,
             ],
-            outputs=[state_in.c_vec],
+            outputs=[state_mid.c_vec],
             device=model.device,
         )
 
@@ -1390,11 +1379,11 @@ class SemiImplicitMoreauIntegrator:
             dim=model.articulation_count,
             inputs=[
                 model.G_mat,
-                state_in.c_vec,
+                state_mid.c_vec,
                 mu,
                 prox_iter,
             ],
-            outputs=[state_in.percussion],
+            outputs=[state_mid.percussion],
             device=model.device,
         )
 
@@ -1405,10 +1394,10 @@ class SemiImplicitMoreauIntegrator:
             inputs=[
                 model.c_body_vec,
                 model.point_vec,
-                state_in.percussion,
+                state_mid.percussion,
                 dt,
             ],
-            outputs=[state_in.body_f_s],
+            outputs=[state_mid.body_f_s],
             device=model.device,
         )
 
@@ -1422,7 +1411,7 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_parent,
                 model.joint_q_start,
                 model.joint_qd_start,
-                state_in.joint_q_mid,
+                state_mid.joint_q,
                 state_in.joint_qd,
                 model.joint_act,
                 model.joint_target,
@@ -1433,8 +1422,8 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_limit_ke,
                 model.joint_limit_kd,
                 model.joint_axis,
-                state_in.joint_S_s,
-                state_in.body_f_s,
+                state_mid.joint_S_s,
+                state_mid.body_f_s,
             ],
             outputs=[state_out.body_ft_s, state_out.joint_tau],
             device=model.device,
@@ -1544,7 +1533,7 @@ class SemiImplicitMoreauIntegrator:
 
         return state_out
 
-    def eval_mass_matrix(self, model, state_in):
+    def eval_mass_matrix(self, model, state_mid):
         # build J
         wp.launch(
             kernel=eval_rigid_jacobian,
@@ -1555,7 +1544,7 @@ class SemiImplicitMoreauIntegrator:
                 model.articulation_J_start,
                 model.joint_parent,
                 model.joint_qd_start,
-                state_in.joint_S_s,
+                state_mid.joint_S_s,
             ],
             outputs=[model.J],
             device=model.device,
@@ -1569,7 +1558,7 @@ class SemiImplicitMoreauIntegrator:
                 # inputs
                 model.articulation_start,  # now, originally articulation_joint_start
                 model.articulation_M_start,
-                state_in.body_I_s,
+                state_mid.body_I_s,
             ],
             outputs=[model.M],
             device=model.device,
@@ -1627,7 +1616,7 @@ class SemiImplicitMoreauIntegrator:
                 model.J,
                 model.articulation_J_start,
                 model.articulation_Jc_start,
-                state_in.body_X_sc,
+                state_mid.body_X_sc,
                 model.rigid_contact_max,
                 model.articulation_count,
                 int(model.joint_dof_count / model.articulation_count),
@@ -1672,5 +1661,17 @@ class SemiImplicitMoreauIntegrator:
             model.Jc,
             model.Inv_M_times_Jc_t,
             model.G,
+            device=model.device,
+        )
+
+        # convert G to matrix
+        wp.launch(
+            kernel=convert_G_to_matrix,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_G_start,
+                model.G,
+            ],
+            outputs=[model.G_mat],
             device=model.device,
         )
