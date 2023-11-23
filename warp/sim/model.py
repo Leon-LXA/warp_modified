@@ -697,9 +697,6 @@ class Model:
             s.tmp = wp.zeros_like(self.joint_qd, requires_grad=True)
 
             # rigid contact data
-            s.joint_q_mid = wp.zeros_like(self.joint_q, requires_grad=True)
-
-            s.body_ft_s_h = wp.zeros((self.body_count), dtype=wp.spatial_vectorf, requires_grad=True)
             s.percussion = wp.zeros((self.articulation_count, 4), dtype=wp.vec3, requires_grad=True)
             
             # compute G and c

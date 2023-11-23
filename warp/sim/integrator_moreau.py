@@ -1289,7 +1289,7 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_limit_kd,
                 model.joint_axis,
                 state_mid.joint_S_s,
-                state_in.body_f_s,
+                state_mid.body_f_s,
             ],
             outputs=[state_mid.body_ft_s, state_mid.joint_tau],
             device=model.device,
