@@ -904,18 +904,7 @@ def matmul_batched(batch_count, m, n, k, t1, t2, A_start, B_start, C_start, A, B
     wp.launch(
         kernel=eval_dense_gemm_batched,
         dim=threads,
-        inputs=[
-            m,
-            n,
-            k,
-            t1,
-            t2,
-            A_start,
-            B_start,
-            C_start,
-            A,
-            B,
-        ],
+        inputs=[m, n, k, t1, t2, A_start, B_start, C_start, A, B],
         outputs=[C],
         device=device,
     )
@@ -1077,6 +1066,56 @@ def dense_J_index(J_start: wp.array(dtype=int), dim_count: int, dof_count: int, 
 
 
 @wp.kernel
+def prox_wo_iteration(
+    G_mat: wp.array3d(dtype=wp.mat33),
+    c_vec: wp.array2d(dtype=wp.vec3),
+    mu: float,
+    prox_iter: int,
+    percussion: wp.array2d(dtype=wp.vec3),
+):
+    tid = wp.tid()
+
+    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec[tid, 0]
+    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec[tid, 1]
+    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec[tid, 2]
+    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec[tid, 3]
+
+    if p_0[1] <= 0.0:
+        p_0 = wp.vec3(0.0, 0.0, 0.0)
+    elif p_0[0] != 0.0 or p_0[2] != 0.0:
+        fm = wp.sqrt(p_0[0] ** 2.0 + p_0[2] ** 2.0)  # friction magnitude
+        if mu * p_0[1] < fm:
+            p_0 = wp.vec3(p_0[0] * mu * p_0[1] / fm, p_0[1], p_0[2] * mu * p_0[1] / fm)
+
+    if p_1[1] <= 0.0:
+        p_1 = wp.vec3(0.0, 0.0, 0.0)
+    elif p_1[0] != 0.0 or p_1[2] != 0.0:
+        fm = wp.sqrt(p_1[0] ** 2.0 + p_1[2] ** 2.0)  # friction magnitude
+        if mu * p_1[1] < fm:
+            p_1 = wp.vec3(p_1[0] * mu * p_1[1] / fm, p_1[1], p_1[2] * mu * p_1[1] / fm)
+
+    if p_2[1] <= 0.0:
+        p_2 = wp.vec3(0.0, 0.0, 0.0)
+    elif p_2[0] != 0.0 or p_2[2] != 0.0:
+        fm = wp.sqrt(p_2[0] ** 2.0 + p_2[2] ** 2.0)  # friction magnitude
+        if mu * p_2[1] < fm:
+            p_2 = wp.vec3(p_2[0] * mu * p_2[1] / fm, p_2[1], p_2[2] * mu * p_2[1] / fm)
+
+    if p_3[1] <= 0.0:
+        p_3 = wp.vec3(0.0, 0.0, 0.0)
+    elif p_3[0] != 0.0 or p_3[2] != 0.0:
+        fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
+        if mu * p_3[1] < fm:
+            p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
+
+
+
+    percussion[tid, 0] = p_0
+    percussion[tid, 1] = p_1
+    percussion[tid, 2] = p_2
+    percussion[tid, 3] = p_3
+
+@wp.kernel
 def prox_iteration(
     G_mat: wp.array3d(dtype=wp.mat33),
     c_vec: wp.array2d(dtype=wp.vec3),
@@ -1086,44 +1125,178 @@ def prox_iteration(
 ):
     tid = wp.tid()
 
-    G = G_mat[tid]
-    c = c_vec[tid]
-    p = percussion[tid]
-
     # initialize percussions with steady state
     for i in range(4):
-        p[i] = -wp.inverse(G[i, i]) * c[i]
-        # # overwrite percussions with steady state only in normal direction
-        # p[i] = wp.vec3(0.0, p[i][1], 0.0)
+        percussion[tid, i] = -wp.inverse(G_mat[tid, i, i]) * c_vec[tid, i]
+        # overwrite percussions with steady state only in normal direction
+        # percussion[tid, i] = wp.vec3(0.0, percussion[tid, i][1], 0.0)
 
-    # solve percussions iteratively
+    # # solve percussions iteratively
     for it in range(prox_iter):
         for i in range(4):
             # calculate sum(G_ij*p_j) and sum over det(G_ij)
             sum = wp.vec3(0.0, 0.0, 0.0)
             r_sum = 0.0
             for j in range(4):
-                sum += G[i, j] * p[j]
-                r_sum += wp.determinant(G[i, j])
+                sum += G_mat[tid, i, j] * percussion[tid, j]
+                r_sum += wp.determinant(G_mat[tid, i, j])
             r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
             # update percussion
-            p[i] = p[i] - r * (sum + c[i])
+            percussion[tid, i] = percussion[tid, i] - r * (sum + c_vec[tid, i])
 
             # projection to friction cone
-            if p[i][1] < 0.0:
-                p[i] = wp.vec3(0.0, 0.0, 0.0)
-            fm = wp.sqrt(p[i][0] ** 2.0 + p[i][2] ** 2.0)  # friction magnitude
-            if mu * p[i][1] < fm:
-                p[i] = wp.vec3(p[i][0] * mu * p[i][1] / fm, p[i][1], p[i][2] * mu * p[i][1] / fm)
+            if percussion[tid, i][1] <= 0.0:
+                percussion[tid, i] = wp.vec3(0.0, 0.0, 0.0)
+            elif percussion[tid, i][0] != 0.0 or percussion[tid, i][2] != 0.0:
+                fm = wp.sqrt(percussion[tid, i][0] ** 2.0 + percussion[tid, i][2] ** 2.0)  # friction magnitude
+                if mu * percussion[tid, i][1] < fm:
+                    percussion[tid, i] = wp.vec3(
+                        percussion[tid, i][0] * mu * percussion[tid, i][1] / fm,
+                        percussion[tid, i][1],
+                        percussion[tid, i][2] * mu * percussion[tid, i][1] / fm,
+                    )
 
 
 @wp.kernel
-def convert_G_to_matrix(
-    G_start: wp.array(dtype=int),
-    G: wp.array(dtype=float),
+def prox_iteration_unrolled(
     G_mat: wp.array3d(dtype=wp.mat33),
+    c_vec: wp.array2d(dtype=wp.vec3),
+    mu: float,
+    prox_iter: int,
+    percussion: wp.array2d(dtype=wp.vec3),
 ):
+    tid = wp.tid()
+
+    # initialize percussions with steady state
+    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec[tid, 0]
+    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec[tid, 1]
+    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec[tid, 2]
+    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec[tid, 3]
+    # overwrite percussions with steady state only in normal direction
+    # p_0 = wp.vec3(0.0, p_0[1], 0.0)
+    # p_1 = wp.vec3(0.0, p_1[1], 0.0)
+    # p_2 = wp.vec3(0.0, p_2[1], 0.0)
+    # p_3 = wp.vec3(0.0, p_3[1], 0.0)
+
+    # # solve percussions iteratively
+    for it in range(prox_iter):
+        # CONTACT 0
+        # calculate sum(G_ij*p_j) and sum over det(G_ij)
+        sum = wp.vec3(0.0, 0.0, 0.0)
+        r_sum = 0.0
+
+        sum += G_mat[tid, 0, 0] * p_0
+        r_sum += wp.determinant(G_mat[tid, 0, 0])
+        sum += G_mat[tid, 0, 1] * p_1
+        r_sum += wp.determinant(G_mat[tid, 0, 1])
+        sum += G_mat[tid, 0, 2] * p_2
+        r_sum += wp.determinant(G_mat[tid, 0, 2])
+        sum += G_mat[tid, 0, 3] * p_3
+        r_sum += wp.determinant(G_mat[tid, 0, 3])
+
+        r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+        # update percussion
+        p_0 = p_0 - r * (sum + c_vec[tid, 0])
+
+        # projection to friction cone
+        if p_0[1] <= 0.0:
+            p_0 = wp.vec3(0.0, 0.0, 0.0)
+        elif p_0[0] != 0.0 or p_0[2] != 0.0:
+            fm = wp.sqrt(p_0[0] ** 2.0 + p_0[2] ** 2.0)  # friction magnitude
+            if mu * p_0[1] < fm:
+                p_0 = wp.vec3(p_0[0] * mu * p_0[1] / fm, p_0[1], p_0[2] * mu * p_0[1] / fm)
+
+        # CONTACT 1
+        # calculate sum(G_ij*p_j) and sum over det(G_ij)
+        sum = wp.vec3(0.0, 0.0, 0.0)
+        r_sum = 0.0
+
+        sum += G_mat[tid, 1, 0] * p_0
+        r_sum += wp.determinant(G_mat[tid, 1, 0])
+        sum += G_mat[tid, 1, 1] * p_1
+        r_sum += wp.determinant(G_mat[tid, 1, 1])
+        sum += G_mat[tid, 1, 2] * p_2
+        r_sum += wp.determinant(G_mat[tid, 1, 2])
+        sum += G_mat[tid, 1, 3] * p_3
+        r_sum += wp.determinant(G_mat[tid, 1, 3])
+
+        r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+        # update percussion
+        p_1 = p_1 - r * (sum + c_vec[tid, 1])
+
+        # projection to friction cone
+        if p_1[1] <= 0.0:
+            p_1 = wp.vec3(0.0, 0.0, 0.0)
+        elif p_1[0] != 0.0 or p_1[2] != 0.0:
+            fm = wp.sqrt(p_1[0] ** 2.0 + p_1[2] ** 2.0)  # friction magnitude
+            if mu * p_1[1] < fm:
+                p_1 = wp.vec3(p_1[0] * mu * p_1[1] / fm, p_1[1], p_1[2] * mu * p_1[1] / fm)
+
+        # CONTACT 2
+        # calculate sum(G_ij*p_j) and sum over det(G_ij)
+        sum = wp.vec3(0.0, 0.0, 0.0)
+        r_sum = 0.0
+
+        sum += G_mat[tid, 2, 0] * p_0
+        r_sum += wp.determinant(G_mat[tid, 2, 0])
+        sum += G_mat[tid, 2, 1] * p_1
+        r_sum += wp.determinant(G_mat[tid, 2, 1])
+        sum += G_mat[tid, 2, 2] * p_2
+        r_sum += wp.determinant(G_mat[tid, 2, 2])
+        sum += G_mat[tid, 2, 3] * p_3
+        r_sum += wp.determinant(G_mat[tid, 2, 3])
+
+        r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+        # update percussion
+        p_2 = p_2 - r * (sum + c_vec[tid, 2])
+
+        # projection to friction cone
+        if p_2[1] <= 0.0:
+            p_2 = wp.vec3(0.0, 0.0, 0.0)
+        elif p_2[0] != 0.0 or p_2[2] != 0.0:
+            fm = wp.sqrt(p_2[0] ** 2.0 + p_2[2] ** 2.0)  # friction magnitude
+            if mu * p_2[1] < fm:
+                p_2 = wp.vec3(p_2[0] * mu * p_2[1] / fm, p_2[1], p_2[2] * mu * p_2[1] / fm)
+
+        # CONTACT 3
+        # calculate sum(G_ij*p_j) and sum over det(G_ij)
+        sum = wp.vec3(0.0, 0.0, 0.0)
+        r_sum = 0.0
+
+        sum += G_mat[tid, 3, 0] * p_0
+        r_sum += wp.determinant(G_mat[tid, 3, 0])
+        sum += G_mat[tid, 3, 1] * p_1
+        r_sum += wp.determinant(G_mat[tid, 3, 1])
+        sum += G_mat[tid, 3, 2] * p_2
+        r_sum += wp.determinant(G_mat[tid, 3, 2])
+        sum += G_mat[tid, 3, 3] * p_3
+        r_sum += wp.determinant(G_mat[tid, 3, 3])
+
+        r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+        # update percussion
+        p_3 = p_3 - r * (sum + c_vec[tid, 3])
+
+        # projection to friction cone
+        if p_3[1] <= 0.0:
+            p_3 = wp.vec3(0.0, 0.0, 0.0)
+        elif p_3[0] != 0.0 or p_3[2] != 0.0:
+            fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
+            if mu * p_3[1] < fm:
+                p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
+
+    percussion[tid, 0] = p_0
+    percussion[tid, 1] = p_1
+    percussion[tid, 2] = p_2
+    percussion[tid, 3] = p_3
+
+
+@wp.kernel
+def convert_G_to_matrix(G_start: wp.array(dtype=int), G: wp.array(dtype=float), G_mat: wp.array3d(dtype=wp.mat33)):
     tid = wp.tid()
 
     for i in range(4):
@@ -1154,15 +1327,23 @@ def dense_G_index(G_start: wp.array(dtype=int), tid: int, i: int, j: int, k: int
 
 
 @wp.kernel
-def convert_c_to_vector(
-    c: wp.array(dtype=float),
-    c_vec: wp.array2d(dtype=wp.vec3),
-):
+def convert_c_to_vector(c: wp.array(dtype=float), c_vec: wp.array2d(dtype=wp.vec3)):
     tid = wp.tid()
 
     for i in range(4):
         c_start = tid * 3 * 4 + i * 3  # each articulation has 4 contacts, each contact has 3 dimensions
         c_vec[tid, i] = wp.vec3(c[c_start], c[c_start + 1], c[c_start + 2])
+
+
+@wp.kernel
+def vectorize_percussion(percussion: wp.array2d(dtype=wp.vec3), percussion_vec: wp.array(dtype=float)):
+    tid = wp.tid()
+
+    for i in range(4):
+        start = tid * 3 * 4 + i * 3
+        percussion_vec[start] = percussion[tid, i][0]
+        percussion_vec[start + 1] = percussion[tid, i][1]
+        percussion_vec[start + 2] = percussion[tid, i][2]
 
 
 @wp.kernel
@@ -1175,12 +1356,71 @@ def p_to_f_s(
 ):
     tid = wp.tid()
 
-    p = percussion[tid]
-
     for i in range(4):
-        f = -p[i] / dt
+        f = -percussion[tid, i] / dt
         t = wp.cross(point_vec[tid * 4 + i], f)
         wp.atomic_add(body_f_s, c_body_vec[tid * 4 + i], wp.spatial_vector(t, f))
+
+
+@wp.kernel
+def split_matrix(
+    A: wp.array(dtype=float),
+    a_1: wp.array(dtype=float),
+    a_2: wp.array(dtype=float),
+    a_3: wp.array(dtype=float),
+    a_4: wp.array(dtype=float),
+    a_5: wp.array(dtype=float),
+    a_6: wp.array(dtype=float),
+    a_7: wp.array(dtype=float),
+    a_8: wp.array(dtype=float),
+    a_9: wp.array(dtype=float),
+    a_10: wp.array(dtype=float),
+    a_11: wp.array(dtype=float),
+    a_12: wp.array(dtype=float),
+):
+    for i in range(18):
+        a_1[i] = A[i]
+        a_2[i] = A[i + 18]
+        a_3[i] = A[i + 36]
+        a_4[i] = A[i + 54]
+        a_5[i] = A[i + 72]
+        a_6[i] = A[i + 90]
+        a_7[i] = A[i + 108]
+        a_8[i] = A[i + 126]
+        a_9[i] = A[i + 144]
+        a_10[i] = A[i + 162]
+        a_11[i] = A[i + 180]
+        a_12[i] = A[i + 198]
+
+@wp.kernel
+def create_matrix(
+    a_1: wp.array(dtype=float),
+    a_2: wp.array(dtype=float),
+    a_3: wp.array(dtype=float),
+    a_4: wp.array(dtype=float),
+    a_5: wp.array(dtype=float),
+    a_6: wp.array(dtype=float),
+    a_7: wp.array(dtype=float),
+    a_8: wp.array(dtype=float),
+    a_9: wp.array(dtype=float),
+    a_10: wp.array(dtype=float),
+    a_11: wp.array(dtype=float),
+    a_12: wp.array(dtype=float),
+    A: wp.array(dtype=float),
+):
+    for i in range(18):
+        A[i] = a_1[i]
+        A[i + 18] = a_2[i]
+        A[i + 36] = a_3[i]
+        A[i + 54] = a_4[i]
+        A[i + 72] = a_5[i]
+        A[i + 90] = a_6[i]
+        A[i + 108] = a_7[i]
+        A[i + 126] = a_8[i]
+        A[i + 144] = a_9[i]
+        A[i + 162] = a_10[i]
+        A[i + 180] = a_11[i]
+        A[i + 198] = a_12[i]
 
 
 ##########################
@@ -1194,7 +1434,9 @@ class SemiImplicitMoreauIntegrator:
     def __init__(self):
         pass
 
-    def simulate(self, model, state_in, state_mid, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10):
+    def simulate(
+        self, model, state_in, state_mid, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10
+    ):
         # integrate position with euler half a step
         wp.launch(
             kernel=integrate_q_halfstep,
@@ -1207,9 +1449,7 @@ class SemiImplicitMoreauIntegrator:
                 state_in.joint_qd,
                 dt,
             ],
-            outputs=[
-                state_mid.joint_q,
-            ],
+            outputs=[state_mid.joint_q],
             device=model.device,
         )
 
@@ -1366,37 +1606,68 @@ class SemiImplicitMoreauIntegrator:
         wp.launch(
             kernel=convert_c_to_vector,
             dim=model.articulation_count,
-            inputs=[
-                state_mid.c,
-            ],
+            inputs=[state_mid.c],
             outputs=[state_mid.c_vec],
             device=model.device,
         )
 
         # prox iteration
         wp.launch(
-            kernel=prox_iteration,
+            kernel=prox_iteration_unrolled,
             dim=model.articulation_count,
-            inputs=[
-                model.G_mat,
-                state_mid.c_vec,
-                mu,
-                prox_iter,
-            ],
+            inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
             outputs=[state_mid.percussion],
             device=model.device,
         )
+
+        # # vectorize percussion
+        # wp.launch(
+        #     kernel=vectorize_percussion,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         state_mid.percussion,
+        #     ],
+        #     outputs=[state_mid.percussion_vec],
+        #     device=model.device,
+        # )
+
+        # # compute Jc^T * p
+        # matmul_batched(
+        #     model.articulation_count,
+        #     model.articulation_Jc_cols,  # m
+        #     model.articulation_vec_size,  # n
+        #     model.articulation_Jc_rows,  # intermediate dim
+        #     1,
+        #     0,
+        #     model.articulation_Jc_start,
+        #     model.articulation_contact_dim_start,
+        #     model.articulation_dof_start,
+        #     model.Jc,
+        #     state_mid.percussion_vec,
+        #     state_mid.JcT_p,
+        #     device=model.device,
+        # )
+
+        # # compute tau as state_mid.joint_tau + Jc^T * p/dt
+        # wp.launch(
+        #     kernel=eval_dense_add_batched_2,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_Jc_cols,
+        #         model.articulation_dof_start,
+        #         state_mid.joint_tau,
+        #         state_mid.JcT_p,
+        #         1 / dt,
+        #     ],
+        #     outputs=[state_out.joint_tau],
+        #     device=model.device,
+        # )
 
         # map p to body forces
         wp.launch(
             kernel=p_to_f_s,
             dim=model.articulation_count,
-            inputs=[
-                model.c_body_vec,
-                model.point_vec,
-                state_mid.percussion,
-                dt,
-            ],
+            inputs=[model.c_body_vec, model.point_vec, state_mid.percussion, dt],
             outputs=[state_mid.body_f_s],
             device=model.device,
         )
@@ -1459,10 +1730,7 @@ class SemiImplicitMoreauIntegrator:
                 state_out.joint_qdd,
                 dt,
             ],
-            outputs=[
-                state_out.joint_q,
-                state_out.joint_qd,
-            ],
+            outputs=[state_out.joint_q, state_out.joint_qd],
             device=model.device,
         )
 
@@ -1520,15 +1788,8 @@ class SemiImplicitMoreauIntegrator:
         wp.launch(
             kernel=inertial_body_pos_vel,
             dim=model.articulation_count,
-            inputs=[
-                model.articulation_start,
-                state_out.body_X_sc,
-                state_out.body_v_s,
-            ],
-            outputs=[
-                state_out.body_q,
-                state_out.body_qd,
-            ],
+            inputs=[model.articulation_start, state_out.body_X_sc, state_out.body_v_s],
+            outputs=[state_out.body_q, state_out.body_qd],
         )
 
         return state_out
@@ -1630,22 +1891,276 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # solve for X^T (X = H^-1*Jc^T) can also be done in eval_mass_matrix
+        
+        # original
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched_matrix,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         int(model.joint_dof_count / model.articulation_count),
+        #         model.articulation_Jc_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         model.Jc,
+        #         model.TMP,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t],
+        #     device=model.device,
+        # )
+
+        # parallel
         wp.launch(
-            kernel=eval_dense_solve_batched_matrix,
-            dim=model.articulation_count,
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count * 4 * 3,
             inputs=[
-                int(model.joint_dof_count / model.articulation_count),
-                model.articulation_Jc_start,
-                model.articulation_H_start,
-                model.articulation_H_rows,
+                # int(model.joint_dof_count / model.articulation_count),
+                model.articulation_Jc_row_start,
+                model.articulation_H_start_matrix,
+                model.articulation_H_rows_matrix,
                 model.H,
                 model.L,
                 model.Jc,
                 model.TMP,
             ],
-            outputs=[model.Inv_M_times_Jc_t],
+            outputs=[state_mid.Inv_M_times_Jc_t],
             device=model.device,
         )
+
+        # split
+        # wp.launch(
+        #     kernel=split_matrix,
+        #     dim=model.articulation_count,
+        #     inputs=[model.Jc],
+        #     outputs=[
+        #         state_mid.Jc_1,
+        #         state_mid.Jc_2,
+        #         state_mid.Jc_3,
+        #         state_mid.Jc_4,
+        #         state_mid.Jc_5,
+        #         state_mid.Jc_6,
+        #         state_mid.Jc_7,
+        #         state_mid.Jc_8,
+        #         state_mid.Jc_9,
+        #         state_mid.Jc_10,
+        #         state_mid.Jc_11,
+        #         state_mid.Jc_12,
+        #     ],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_1,
+        #         state_mid.tmp_1,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_1],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_2,
+        #         state_mid.tmp_2,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_2],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_3,
+        #         state_mid.tmp_3,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_3],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_4,
+        #         state_mid.tmp_4,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_4],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_5,
+        #         state_mid.tmp_5,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_5],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_6,
+        #         state_mid.tmp_6,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_6],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_7,
+        #         state_mid.tmp_7,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_7],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_8,
+        #         state_mid.tmp_8,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_8],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_9,
+        #         state_mid.tmp_9,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_9],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_10,
+        #         state_mid.tmp_10,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_10],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_11,
+        #         state_mid.tmp_11,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_11],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_dof_start,
+        #         model.articulation_H_start,
+        #         model.articulation_H_rows,
+        #         model.H,
+        #         model.L,
+        #         state_mid.Jc_12,
+        #         state_mid.tmp_12,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t_12],
+        #     device=model.device,
+        # )
+
+        # wp.launch(
+        #     kernel=create_matrix,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         state_mid.Inv_M_times_Jc_t_1,
+        #         state_mid.Inv_M_times_Jc_t_2,
+        #         state_mid.Inv_M_times_Jc_t_3,
+        #         state_mid.Inv_M_times_Jc_t_4,
+        #         state_mid.Inv_M_times_Jc_t_5,
+        #         state_mid.Inv_M_times_Jc_t_6,
+        #         state_mid.Inv_M_times_Jc_t_7,
+        #         state_mid.Inv_M_times_Jc_t_8,
+        #         state_mid.Inv_M_times_Jc_t_9,
+        #         state_mid.Inv_M_times_Jc_t_10,
+        #         state_mid.Inv_M_times_Jc_t_11,
+        #         state_mid.Inv_M_times_Jc_t_12,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t],
+        # )
 
         # compute G = Jc*(H^-1*Jc^T)
         matmul_batched(
@@ -1659,7 +2174,7 @@ class SemiImplicitMoreauIntegrator:
             model.articulation_Jc_start,
             model.articulation_G_start,
             model.Jc,
-            model.Inv_M_times_Jc_t,
+            state_mid.Inv_M_times_Jc_t,
             model.G,
             device=model.device,
         )
@@ -1668,10 +2183,7 @@ class SemiImplicitMoreauIntegrator:
         wp.launch(
             kernel=convert_G_to_matrix,
             dim=model.articulation_count,
-            inputs=[
-                model.articulation_G_start,
-                model.G,
-            ],
+            inputs=[model.articulation_G_start, model.G],
             outputs=[model.G_mat],
             device=model.device,
         )
