@@ -1108,12 +1108,11 @@ def prox_wo_iteration(
         if mu * p_3[1] < fm:
             p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
 
-
-
     percussion[tid, 0] = p_0
     percussion[tid, 1] = p_1
     percussion[tid, 2] = p_2
     percussion[tid, 3] = p_3
+
 
 @wp.kernel
 def prox_iteration(
@@ -1392,6 +1391,7 @@ def split_matrix(
         a_11[i] = A[i + 180]
         a_12[i] = A[i + 198]
 
+
 @wp.kernel
 def create_matrix(
     a_1: wp.array(dtype=float),
@@ -1535,142 +1535,11 @@ class SemiImplicitMoreauIntegrator:
             device=model.device,
         )
 
-        # find c
-        # solve for x (x = H^-1*h(tau))
-        wp.launch(
-            kernel=eval_dense_solve_batched,
-            dim=model.articulation_count,
-            inputs=[
-                model.articulation_dof_start,
-                model.articulation_H_start,
-                model.articulation_H_rows,
-                model.H,
-                model.L,
-                state_mid.joint_tau,
-                state_mid.tmp_inv_m_times_h,
-            ],
-            outputs=[state_mid.inv_m_times_h],
-            device=model.device,
-        )
-
-        # compute Jc*(H^-1*h(tau))
-        matmul_batched(
-            model.articulation_count,
-            model.articulation_Jc_rows,  # m
-            model.articulation_vec_size,  # n
-            model.articulation_Jc_cols,  # intermediate dim
-            0,
-            0,
-            model.articulation_Jc_start,
-            model.articulation_dof_start,
-            model.articulation_contact_dim_start,
-            model.Jc,
-            state_mid.inv_m_times_h,
-            state_mid.Jc_times_inv_m_times_h,
-            device=model.device,
-        )
-
-        # compute Jc*qd
-        matmul_batched(
-            model.articulation_count,
-            model.articulation_Jc_rows,  # m
-            model.articulation_vec_size,  # n
-            model.articulation_Jc_cols,  # intermediate dim
-            0,
-            0,
-            model.articulation_Jc_start,
-            model.articulation_dof_start,
-            model.articulation_contact_dim_start,
-            model.Jc,
-            state_in.joint_qd,
-            state_mid.Jc_qd,
-            device=model.device,
-        )
-
-        # compute Jc*qd + Jc*(H^-1*h(tau)) * dt
-        wp.launch(
-            kernel=eval_dense_add_batched,
-            dim=model.articulation_count,
-            inputs=[
-                model.articulation_Jc_rows,
-                model.articulation_contact_dim_start,
-                state_mid.Jc_qd,
-                state_mid.Jc_times_inv_m_times_h,
-                dt,
-            ],
-            outputs=[state_mid.c],
-            device=model.device,
-        )
-
-        # convert c to matrix/vector arrays
-        wp.launch(
-            kernel=convert_c_to_vector,
-            dim=model.articulation_count,
-            inputs=[state_mid.c],
-            outputs=[state_mid.c_vec],
-            device=model.device,
-        )
+        # eval Jc, G, and c
+        self.eval_contact_quantities(model, state_in, state_mid, dt)
 
         # prox iteration
-        wp.launch(
-            kernel=prox_iteration_unrolled,
-            dim=model.articulation_count,
-            inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
-            outputs=[state_mid.percussion],
-            device=model.device,
-        )
-
-        # # vectorize percussion
-        # wp.launch(
-        #     kernel=vectorize_percussion,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         state_mid.percussion,
-        #     ],
-        #     outputs=[state_mid.percussion_vec],
-        #     device=model.device,
-        # )
-
-        # # compute Jc^T * p
-        # matmul_batched(
-        #     model.articulation_count,
-        #     model.articulation_Jc_cols,  # m
-        #     model.articulation_vec_size,  # n
-        #     model.articulation_Jc_rows,  # intermediate dim
-        #     1,
-        #     0,
-        #     model.articulation_Jc_start,
-        #     model.articulation_contact_dim_start,
-        #     model.articulation_dof_start,
-        #     model.Jc,
-        #     state_mid.percussion_vec,
-        #     state_mid.JcT_p,
-        #     device=model.device,
-        # )
-
-        # # compute tau as state_mid.joint_tau + Jc^T * p/dt
-        # wp.launch(
-        #     kernel=eval_dense_add_batched_2,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_Jc_cols,
-        #         model.articulation_dof_start,
-        #         state_mid.joint_tau,
-        #         state_mid.JcT_p,
-        #         1 / dt,
-        #     ],
-        #     outputs=[state_out.joint_tau],
-        #     device=model.device,
-        # )
-
-        # map p to body forces
-        wp.launch(
-            kernel=p_to_f_s,
-            dim=model.articulation_count,
-            inputs=[model.c_body_vec, model.point_vec, state_mid.percussion, dt],
-            outputs=[state_mid.body_f_s],
-            device=model.device,
-        )
+        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter)
 
         # recompute tau with contact forces
         wp.launch(
@@ -1868,6 +1737,7 @@ class SemiImplicitMoreauIntegrator:
             device=model.device,
         )
 
+    def eval_contact_quantities(self, model, state_in, state_mid, dt):
         # construct J_c
         # assume no contact switches in time step
         wp.launch(
@@ -1890,8 +1760,8 @@ class SemiImplicitMoreauIntegrator:
             device=model.device,
         )
 
-        # solve for X^T (X = H^-1*Jc^T) can also be done in eval_mass_matrix
-        
+        # solve for X^T (X = H^-1*Jc^T)
+
         # original
         # wp.launch(
         #     kernel=eval_dense_solve_batched_matrix,
@@ -2185,5 +2055,142 @@ class SemiImplicitMoreauIntegrator:
             dim=model.articulation_count,
             inputs=[model.articulation_G_start, model.G],
             outputs=[model.G_mat],
+            device=model.device,
+        )
+
+        # solve for x (x = H^-1*h(tau))
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.joint_tau,
+                state_mid.tmp_inv_m_times_h,
+            ],
+            outputs=[state_mid.inv_m_times_h],
+            device=model.device,
+        )
+
+        # compute Jc*(H^-1*h(tau))
+        matmul_batched(
+            model.articulation_count,
+            model.articulation_Jc_rows,  # m
+            model.articulation_vec_size,  # n
+            model.articulation_Jc_cols,  # intermediate dim
+            0,
+            0,
+            model.articulation_Jc_start,
+            model.articulation_dof_start,
+            model.articulation_contact_dim_start,
+            model.Jc,
+            state_mid.inv_m_times_h,
+            state_mid.Jc_times_inv_m_times_h,
+            device=model.device,
+        )
+
+        # compute Jc*qd
+        matmul_batched(
+            model.articulation_count,
+            model.articulation_Jc_rows,  # m
+            model.articulation_vec_size,  # n
+            model.articulation_Jc_cols,  # intermediate dim
+            0,
+            0,
+            model.articulation_Jc_start,
+            model.articulation_dof_start,
+            model.articulation_contact_dim_start,
+            model.Jc,
+            state_in.joint_qd,
+            state_mid.Jc_qd,
+            device=model.device,
+        )
+
+        # compute Jc*qd + Jc*(H^-1*h(tau)) * dt
+        wp.launch(
+            kernel=eval_dense_add_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_Jc_rows,
+                model.articulation_contact_dim_start,
+                state_mid.Jc_qd,
+                state_mid.Jc_times_inv_m_times_h,
+                dt,
+            ],
+            outputs=[state_mid.c],
+            device=model.device,
+        )
+
+        # convert c to matrix/vector arrays
+        wp.launch(
+            kernel=convert_c_to_vector,
+            dim=model.articulation_count,
+            inputs=[state_mid.c],
+            outputs=[state_mid.c_vec],
+            device=model.device,
+        )
+
+    def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter):
+        # prox iteration
+        wp.launch(
+            kernel=prox_iteration_unrolled,
+            dim=model.articulation_count,
+            inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
+            outputs=[state_mid.percussion],
+            device=model.device,
+        )
+
+        # # vectorize percussion
+        # wp.launch(
+        #     kernel=vectorize_percussion,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         state_mid.percussion,
+        #     ],
+        #     outputs=[state_mid.percussion_vec],
+        #     device=model.device,
+        # )
+
+        # # compute Jc^T * p
+        # matmul_batched(
+        #     model.articulation_count,
+        #     model.articulation_Jc_cols,  # m
+        #     model.articulation_vec_size,  # n
+        #     model.articulation_Jc_rows,  # intermediate dim
+        #     1,
+        #     0,
+        #     model.articulation_Jc_start,
+        #     model.articulation_contact_dim_start,
+        #     model.articulation_dof_start,
+        #     model.Jc,
+        #     state_mid.percussion_vec,
+        #     state_mid.JcT_p,
+        #     device=model.device,
+        # )
+
+        # # compute tau as state_mid.joint_tau + Jc^T * p/dt
+        # wp.launch(
+        #     kernel=eval_dense_add_batched_2,
+        #     dim=model.articulation_count,
+        #     inputs=[
+        #         model.articulation_Jc_cols,
+        #         model.articulation_dof_start,
+        #         state_mid.joint_tau,
+        #         state_mid.JcT_p,
+        #         1 / dt,
+        #     ],
+        #     outputs=[state_out.joint_tau],
+        #     device=model.device,
+        # )
+
+        # map p to body forces
+        wp.launch(
+            kernel=p_to_f_s,
+            dim=model.articulation_count,
+            inputs=[model.c_body_vec, model.point_vec, state_mid.percussion, dt],
+            outputs=[state_mid.body_f_s],
             device=model.device,
         )
