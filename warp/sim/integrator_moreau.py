@@ -1011,7 +1011,6 @@ def construct_contact_jacobian(
     tid = wp.tid()
 
     contacts_per_articulation = rigid_contact_max / articulation_count
-    foot_id = int(0)
 
     for i in range(2, contacts_per_articulation):  # iterate (almost) all contacts
         contact_id = tid * contacts_per_articulation + i
@@ -1021,6 +1020,7 @@ def construct_contact_jacobian(
         c_dist = geo.thickness[c_shape]
 
         if (c_body - tid) % 3 == 0 and i % 2 == 0:  # only consider foot contacts
+            foot_id = (c_body - tid - tid * 12) / 3 - 1
             X_s = body_X_sc[c_body]
             n = wp.vec3(0.0, 1.0, 0.0)
             # transform point to world space
@@ -1046,7 +1046,6 @@ def construct_contact_jacobian(
 
             c_body_vec[tid * 4 + foot_id] = c_body
             point_vec[tid * 4 + foot_id] = p
-            foot_id += 1
 
 
 @wp.func
@@ -1364,6 +1363,9 @@ def p_to_f_s(
 @wp.kernel
 def split_matrix(
     A: wp.array(dtype=float),
+    dof_count: int,
+    A_start: wp.array(dtype=int),
+    a_start: wp.array(dtype=int),
     a_1: wp.array(dtype=float),
     a_2: wp.array(dtype=float),
     a_3: wp.array(dtype=float),
@@ -1377,23 +1379,28 @@ def split_matrix(
     a_11: wp.array(dtype=float),
     a_12: wp.array(dtype=float),
 ):
-    for i in range(18):
-        a_1[i] = A[i]
-        a_2[i] = A[i + 18]
-        a_3[i] = A[i + 36]
-        a_4[i] = A[i + 54]
-        a_5[i] = A[i + 72]
-        a_6[i] = A[i + 90]
-        a_7[i] = A[i + 108]
-        a_8[i] = A[i + 126]
-        a_9[i] = A[i + 144]
-        a_10[i] = A[i + 162]
-        a_11[i] = A[i + 180]
-        a_12[i] = A[i + 198]
+    tid = wp.tid()
+
+    for i in range(dof_count):
+        a_1[a_start[tid] + i] = A[A_start[tid] + i]
+        a_2[a_start[tid] + i] = A[A_start[tid] + i + 18]
+        a_3[a_start[tid] + i] = A[A_start[tid] + i + 36]
+        a_4[a_start[tid] + i] = A[A_start[tid] + i + 54]
+        a_5[a_start[tid] + i] = A[A_start[tid] + i + 72]
+        a_6[a_start[tid] + i] = A[A_start[tid] + i + 90]
+        a_7[a_start[tid] + i] = A[A_start[tid] + i + 108]
+        a_8[a_start[tid] + i] = A[A_start[tid] + i + 126]
+        a_9[a_start[tid] + i] = A[A_start[tid] + i + 144]
+        a_10[a_start[tid] + i] = A[A_start[tid] + i + 162]
+        a_11[a_start[tid] + i] = A[A_start[tid] + i + 180]
+        a_12[a_start[tid] + i] = A[A_start[tid] + i + 198]
 
 
 @wp.kernel
 def create_matrix(
+    dof_count: int,
+    A_start: wp.array(dtype=int),
+    a_start: wp.array(dtype=int),
     a_1: wp.array(dtype=float),
     a_2: wp.array(dtype=float),
     a_3: wp.array(dtype=float),
@@ -1408,19 +1415,21 @@ def create_matrix(
     a_12: wp.array(dtype=float),
     A: wp.array(dtype=float),
 ):
-    for i in range(18):
-        A[i] = a_1[i]
-        A[i + 18] = a_2[i]
-        A[i + 36] = a_3[i]
-        A[i + 54] = a_4[i]
-        A[i + 72] = a_5[i]
-        A[i + 90] = a_6[i]
-        A[i + 108] = a_7[i]
-        A[i + 126] = a_8[i]
-        A[i + 144] = a_9[i]
-        A[i + 162] = a_10[i]
-        A[i + 180] = a_11[i]
-        A[i + 198] = a_12[i]
+    tid = wp.tid()
+
+    for i in range(dof_count):
+        A[A_start[tid] + i] = a_1[a_start[tid] + i]
+        A[A_start[tid] + i + 18] = a_2[a_start[tid] + i]
+        A[A_start[tid] + i + 36] = a_3[a_start[tid] + i]
+        A[A_start[tid] + i + 54] = a_4[a_start[tid] + i]
+        A[A_start[tid] + i + 72] = a_5[a_start[tid] + i]
+        A[A_start[tid] + i + 90] = a_6[a_start[tid] + i]
+        A[A_start[tid] + i + 108] = a_7[a_start[tid] + i]
+        A[A_start[tid] + i + 126] = a_8[a_start[tid] + i]
+        A[A_start[tid] + i + 144] = a_9[a_start[tid] + i]
+        A[A_start[tid] + i + 162] = a_10[a_start[tid] + i]
+        A[A_start[tid] + i + 180] = a_11[a_start[tid] + i]
+        A[A_start[tid] + i + 198] = a_12[a_start[tid] + i]
 
 
 ##########################
@@ -1771,7 +1780,7 @@ class SemiImplicitMoreauIntegrator:
                 model.rigid_contact_shape0,
                 model.shape_geo,
             ],
-            outputs=[model.Jc, model.c_body_vec, model.point_vec],
+            outputs=[model.Jc, model.c_body_vec, state_mid.point_vec],
             device=model.device,
         )
 
@@ -1795,258 +1804,266 @@ class SemiImplicitMoreauIntegrator:
         #     device=model.device,
         # )
 
-        # parallel
+        # parallel / wrong grads for H
         # kernel 15
+        # wp.launch(
+        #     kernel=eval_dense_solve_batched,
+        #     dim=model.articulation_count * 4 * 3,
+        #     inputs=[
+        #         # int(model.joint_dof_count / model.articulation_count),
+        #         model.articulation_Jc_row_start,
+        #         model.articulation_H_start_matrix,
+        #         model.articulation_H_rows_matrix,
+        #         model.H,
+        #         model.L,
+        #         model.Jc,
+        #         model.TMP,
+        #     ],
+        #     outputs=[state_mid.Inv_M_times_Jc_t],
+        #     device=model.device,
+        # )
+
+        # split
         wp.launch(
-            kernel=eval_dense_solve_batched,
-            dim=model.articulation_count * 4 * 3,
+            kernel=split_matrix,
+            dim=model.articulation_count,
             inputs=[
-                # int(model.joint_dof_count / model.articulation_count),
-                model.articulation_Jc_row_start,
-                model.articulation_H_start_matrix,
-                model.articulation_H_rows_matrix,
-                model.H,
-                model.L,
                 model.Jc,
-                model.TMP,
+                int(model.joint_dof_count / model.articulation_count),
+                model.articulation_Jc_start,
+                model.articulation_dof_start,
             ],
-            outputs=[state_mid.Inv_M_times_Jc_t],
+            outputs=[
+                state_mid.Jc_1,
+                state_mid.Jc_2,
+                state_mid.Jc_3,
+                state_mid.Jc_4,
+                state_mid.Jc_5,
+                state_mid.Jc_6,
+                state_mid.Jc_7,
+                state_mid.Jc_8,
+                state_mid.Jc_9,
+                state_mid.Jc_10,
+                state_mid.Jc_11,
+                state_mid.Jc_12,
+            ],
             device=model.device,
         )
 
-        # split
-        # wp.launch(
-        #     kernel=split_matrix,
-        #     dim=model.articulation_count,
-        #     inputs=[model.Jc],
-        #     outputs=[
-        #         state_mid.Jc_1,
-        #         state_mid.Jc_2,
-        #         state_mid.Jc_3,
-        #         state_mid.Jc_4,
-        #         state_mid.Jc_5,
-        #         state_mid.Jc_6,
-        #         state_mid.Jc_7,
-        #         state_mid.Jc_8,
-        #         state_mid.Jc_9,
-        #         state_mid.Jc_10,
-        #         state_mid.Jc_11,
-        #         state_mid.Jc_12,
-        #     ],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_1,
+                state_mid.tmp_1,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_1],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_1,
-        #         state_mid.tmp_1,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_1],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_2,
+                state_mid.tmp_2,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_2],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_2,
-        #         state_mid.tmp_2,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_2],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_3,
+                state_mid.tmp_3,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_3],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_3,
-        #         state_mid.tmp_3,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_3],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_4,
+                state_mid.tmp_4,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_4],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_4,
-        #         state_mid.tmp_4,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_4],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_5,
+                state_mid.tmp_5,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_5],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_5,
-        #         state_mid.tmp_5,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_5],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_6,
+                state_mid.tmp_6,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_6],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_6,
-        #         state_mid.tmp_6,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_6],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_7,
+                state_mid.tmp_7,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_7],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_7,
-        #         state_mid.tmp_7,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_7],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_8,
+                state_mid.tmp_8,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_8],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_8,
-        #         state_mid.tmp_8,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_8],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_9,
+                state_mid.tmp_9,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_9],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_9,
-        #         state_mid.tmp_9,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_9],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_10,
+                state_mid.tmp_10,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_10],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_10,
-        #         state_mid.tmp_10,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_10],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_11,
+                state_mid.tmp_11,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_11],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_11,
-        #         state_mid.tmp_11,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_11],
-        #     device=model.device,
-        # )
+        wp.launch(
+            kernel=eval_dense_solve_batched,
+            dim=model.articulation_count,
+            inputs=[
+                model.articulation_dof_start,
+                model.articulation_H_start,
+                model.articulation_H_rows,
+                model.H,
+                model.L,
+                state_mid.Jc_12,
+                state_mid.tmp_12,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t_12],
+            device=model.device,
+        )
 
-        # wp.launch(
-        #     kernel=eval_dense_solve_batched,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         model.articulation_dof_start,
-        #         model.articulation_H_start,
-        #         model.articulation_H_rows,
-        #         model.H,
-        #         model.L,
-        #         state_mid.Jc_12,
-        #         state_mid.tmp_12,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t_12],
-        #     device=model.device,
-        # )
-
-        # wp.launch(
-        #     kernel=create_matrix,
-        #     dim=model.articulation_count,
-        #     inputs=[
-        #         state_mid.Inv_M_times_Jc_t_1,
-        #         state_mid.Inv_M_times_Jc_t_2,
-        #         state_mid.Inv_M_times_Jc_t_3,
-        #         state_mid.Inv_M_times_Jc_t_4,
-        #         state_mid.Inv_M_times_Jc_t_5,
-        #         state_mid.Inv_M_times_Jc_t_6,
-        #         state_mid.Inv_M_times_Jc_t_7,
-        #         state_mid.Inv_M_times_Jc_t_8,
-        #         state_mid.Inv_M_times_Jc_t_9,
-        #         state_mid.Inv_M_times_Jc_t_10,
-        #         state_mid.Inv_M_times_Jc_t_11,
-        #         state_mid.Inv_M_times_Jc_t_12,
-        #     ],
-        #     outputs=[state_mid.Inv_M_times_Jc_t],
-        # )
+        wp.launch(
+            kernel=create_matrix,
+            dim=model.articulation_count,
+            inputs=[
+                int(model.joint_dof_count / model.articulation_count),
+                model.articulation_Jc_start,
+                model.articulation_dof_start,
+                state_mid.Inv_M_times_Jc_t_1,
+                state_mid.Inv_M_times_Jc_t_2,
+                state_mid.Inv_M_times_Jc_t_3,
+                state_mid.Inv_M_times_Jc_t_4,
+                state_mid.Inv_M_times_Jc_t_5,
+                state_mid.Inv_M_times_Jc_t_6,
+                state_mid.Inv_M_times_Jc_t_7,
+                state_mid.Inv_M_times_Jc_t_8,
+                state_mid.Inv_M_times_Jc_t_9,
+                state_mid.Inv_M_times_Jc_t_10,
+                state_mid.Inv_M_times_Jc_t_11,
+                state_mid.Inv_M_times_Jc_t_12,
+            ],
+            outputs=[state_mid.Inv_M_times_Jc_t],
+        )
 
         # compute G = Jc*(H^-1*Jc^T)
         # kernel 14
@@ -2215,7 +2232,7 @@ class SemiImplicitMoreauIntegrator:
         wp.launch(
             kernel=p_to_f_s,
             dim=model.articulation_count,
-            inputs=[model.c_body_vec, model.point_vec, state_mid.percussion, dt],
+            inputs=[model.c_body_vec, state_mid.point_vec, state_mid.percussion, dt],
             outputs=[state_mid.body_f_s],
             device=model.device,
         )

@@ -696,6 +696,8 @@ class Model:
             s.tmp = wp.zeros_like(self.joint_qd, requires_grad=True)
 
             # rigid contact data
+            # contact points of quadruped feet
+            s.point_vec = wp.zeros(self.articulation_count*4, dtype=wp.vec3, requires_grad=True)
             s.percussion = wp.zeros((self.articulation_count, 4), dtype=wp.vec3, requires_grad=True)
             # s.percussion_vec = wp.zeros(self.articulation_count*4*3, requires_grad=True)
             
@@ -708,46 +710,46 @@ class Model:
             # s.JcT_p = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.tmp_inv_m_times_h = wp.zeros_like(self.joint_qd, requires_grad=True)
 
-            # s.Jc_1 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_2 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_3 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_4 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_5 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_6 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_7 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_8 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_9 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_10 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_11 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Jc_12 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_1 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_2 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_3 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_4 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_5 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_6 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_7 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_8 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_9 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_10 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_11 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Jc_12 = wp.zeros_like(self.joint_qd, requires_grad=True)
 
-            # s.Inv_M_times_Jc_t_1 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_2 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_3 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_4 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_5 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_6 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_7 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_8 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_9 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_10 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_11 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.Inv_M_times_Jc_t_12 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_1 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_2 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_3 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_4 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_5 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_6 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_7 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_8 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_9 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_10 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_11 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.Inv_M_times_Jc_t_12 = wp.zeros_like(self.joint_qd, requires_grad=True)
 
             s.Inv_M_times_Jc_t = wp.zeros(self.Jc_size, dtype=wp.float32, requires_grad=True)
             
-            # s.tmp_1 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_2 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_3 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_4 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_5 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_6 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_7 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_8 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_9 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_10 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_11 = wp.zeros_like(self.joint_qd, requires_grad=True)
-            # s.tmp_12 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_1 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_2 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_3 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_4 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_5 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_6 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_7 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_8 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_9 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_10 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_11 = wp.zeros_like(self.joint_qd, requires_grad=True)
+            s.tmp_12 = wp.zeros_like(self.joint_qd, requires_grad=True)
 
         return s
 
@@ -917,8 +919,7 @@ class Model:
         )
         # contact bodies of quadruped feet
         self.c_body_vec = wp.zeros(self.articulation_count*4, dtype=wp.int32, device=self.device)
-        # contact points of quadruped feet
-        self.point_vec = wp.zeros(self.articulation_count*4, dtype=wp.vec3, device=self.device)
+        
 
     def flatten(self):
         """Returns a list of Tensors stored by the model

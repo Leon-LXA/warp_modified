@@ -135,9 +135,14 @@ class Tape:
             # print("---------------------  kernel", i, "---------------------")
             # for adj in adj_inputs:
             #     if isinstance(adj, wp.array):
-            #         adj_torch = wp.to_torch(adj)
-            #         ids = adj_torch > 0.5
-            #         print(adj_torch[ids])
+            #         # adj_torch = wp.to_torch(adj)
+            #         # ids = adj_torch > 0.5
+            #         # print(adj_torch)
+            #         sdj_sum = wp.to_torch(adj).view(64,-1).sum(-1)
+            #         all_equal = sdj_sum.unique().numel() == 1
+            #         if not all_equal:
+            #             print("deviation!")
+
             # i += 1
 
     # record a kernel launch on the tape
