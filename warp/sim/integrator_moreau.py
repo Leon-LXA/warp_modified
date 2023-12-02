@@ -1438,6 +1438,7 @@ class SemiImplicitMoreauIntegrator:
         self, model, state_in, state_mid, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10
     ):
         # integrate position with euler half a step
+        # kernel 25 / 20
         wp.launch(
             kernel=integrate_q_halfstep,
             dim=model.body_count,
@@ -1454,6 +1455,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # evaluate mid body transforms
+        # kernel 24 / 19
         wp.launch(
             kernel=eval_rigid_fk,
             dim=model.articulation_count,
@@ -1473,6 +1475,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # evaluate mid joint inertias, motion vectors, and forces
+        # kernel 23 / 18
         wp.launch(
             kernel=eval_rigid_id,
             dim=model.articulation_count,
@@ -1508,6 +1511,7 @@ class SemiImplicitMoreauIntegrator:
             self.eval_mass_matrix(model, state_mid)
 
         # eval_tau (tau will be h)
+        # kernel 17
         wp.launch(
             kernel=eval_rigid_tau,
             dim=model.articulation_count,
@@ -1542,6 +1546,7 @@ class SemiImplicitMoreauIntegrator:
         self.eval_contact_forces(model, state_mid, dt, mu, prox_iter)
 
         # recompute tau with contact forces
+        # kernel 5
         wp.launch(
             kernel=eval_rigid_tau,
             dim=model.articulation_count,
@@ -1570,6 +1575,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # solve for qdd (qdd = M^-1*tau)
+        # kernel 4
         wp.launch(
             kernel=eval_dense_solve_batched,
             dim=model.articulation_count,
@@ -1587,6 +1593,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # integrate
+        # kernel 3
         wp.launch(
             kernel=eval_rigid_integrate,
             dim=model.body_count,
@@ -1604,6 +1611,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # evaluate final body transforms
+        # kernel 2
         wp.launch(
             kernel=eval_rigid_fk,
             dim=model.articulation_count,
@@ -1623,6 +1631,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # evaluate final joint inertias, motion vectors, and forces
+        # kernel 1
         wp.launch(
             kernel=eval_rigid_id,
             dim=model.articulation_count,
@@ -1654,6 +1663,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # body position and velocity in inertial frame
+        # kernel 0
         wp.launch(
             kernel=inertial_body_pos_vel,
             dim=model.articulation_count,
@@ -1665,6 +1675,7 @@ class SemiImplicitMoreauIntegrator:
 
     def eval_mass_matrix(self, model, state_mid):
         # build J
+        # kernel 22
         wp.launch(
             kernel=eval_rigid_jacobian,
             dim=model.articulation_count,
@@ -1681,6 +1692,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # build M
+        # kernel 21
         wp.launch(
             kernel=eval_rigid_mass,
             dim=model.articulation_count,
@@ -1695,6 +1707,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # form P = M*J
+        # kernel 20
         matmul_batched(
             model.articulation_count,
             model.articulation_M_rows,
@@ -1712,6 +1725,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # form H = J^T*P
+        # kernel 19
         matmul_batched(
             model.articulation_count,
             model.articulation_J_cols,
@@ -1729,6 +1743,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # compute decomposition
+        # kernel 18
         wp.launch(
             kernel=eval_dense_cholesky_batched,
             dim=model.articulation_count,
@@ -1739,7 +1754,7 @@ class SemiImplicitMoreauIntegrator:
 
     def eval_contact_quantities(self, model, state_in, state_mid, dt):
         # construct J_c
-        # assume no contact switches in time step
+        # kernel 16
         wp.launch(
             kernel=construct_contact_jacobian,
             dim=model.articulation_count,
@@ -1781,6 +1796,7 @@ class SemiImplicitMoreauIntegrator:
         # )
 
         # parallel
+        # kernel 15
         wp.launch(
             kernel=eval_dense_solve_batched,
             dim=model.articulation_count * 4 * 3,
@@ -2033,6 +2049,7 @@ class SemiImplicitMoreauIntegrator:
         # )
 
         # compute G = Jc*(H^-1*Jc^T)
+        # kernel 14
         matmul_batched(
             model.articulation_count,
             model.articulation_Jc_rows,  # m
@@ -2050,6 +2067,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # convert G to matrix
+        # kernel 13
         wp.launch(
             kernel=convert_G_to_matrix,
             dim=model.articulation_count,
@@ -2059,6 +2077,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # solve for x (x = H^-1*h(tau))
+        # kernel 12
         wp.launch(
             kernel=eval_dense_solve_batched,
             dim=model.articulation_count,
@@ -2076,6 +2095,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # compute Jc*(H^-1*h(tau))
+        # kernel 11
         matmul_batched(
             model.articulation_count,
             model.articulation_Jc_rows,  # m
@@ -2093,6 +2113,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # compute Jc*qd
+        # kernel 10
         matmul_batched(
             model.articulation_count,
             model.articulation_Jc_rows,  # m
@@ -2110,6 +2131,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # compute Jc*qd + Jc*(H^-1*h(tau)) * dt
+        # kernel 9
         wp.launch(
             kernel=eval_dense_add_batched,
             dim=model.articulation_count,
@@ -2125,6 +2147,7 @@ class SemiImplicitMoreauIntegrator:
         )
 
         # convert c to matrix/vector arrays
+        # kernel 8
         wp.launch(
             kernel=convert_c_to_vector,
             dim=model.articulation_count,
@@ -2135,8 +2158,9 @@ class SemiImplicitMoreauIntegrator:
 
     def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter):
         # prox iteration
+        # kernel 7
         wp.launch(
-            kernel=prox_iteration_unrolled,
+            kernel=prox_wo_iteration,
             dim=model.articulation_count,
             inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
             outputs=[state_mid.percussion],
@@ -2187,6 +2211,7 @@ class SemiImplicitMoreauIntegrator:
         # )
 
         # map p to body forces
+        # kernel 6
         wp.launch(
             kernel=p_to_f_s,
             dim=model.articulation_count,

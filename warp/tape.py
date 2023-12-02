@@ -97,6 +97,7 @@ class Tape:
                 a.grad = g
                 self.const_gradients.add(a)
 
+        i = 0
         # run launches backwards
         for launch in reversed(self.launches):
             if callable(launch):
@@ -130,6 +131,14 @@ class Tape:
                     device=device,
                     adjoint=True,
                 )
+
+            # print("---------------------  kernel", i, "---------------------")
+            # for adj in adj_inputs:
+            #     if isinstance(adj, wp.array):
+            #         adj_torch = wp.to_torch(adj)
+            #         ids = adj_torch > 0.5
+            #         print(adj_torch[ids])
+            # i += 1
 
     # record a kernel launch on the tape
     def record_launch(self, kernel, dim, inputs, outputs, device):
