@@ -1310,10 +1310,10 @@ def prox_iteration_unrolled_soft(
     point_1 = point_vec[tid*4+1]
     point_2 = point_vec[tid*4+2]
     point_3 = point_vec[tid*4+3]
-    c_0 = wp.dot(n, point_0)
-    c_1 = wp.dot(n, point_1)
-    c_2 = wp.dot(n, point_2)
-    c_3 = wp.dot(n, point_3)
+    c_0 = wp.clamp(wp.dot(n, point_0), -1.0, 0.1) # clamp for stability (exp gradients)
+    c_1 = wp.clamp(wp.dot(n, point_1), -1.0, 0.1)
+    c_2 = wp.clamp(wp.dot(n, point_2), -1.0, 0.1)
+    c_3 = wp.clamp(wp.dot(n, point_3), -1.0, 0.1)
 
     # initialize percussions with steady state
     p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec[tid, 0]
@@ -1435,7 +1435,7 @@ def prox_iteration_unrolled_soft(
             fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
             if mu * p_3[1] < fm:
                 p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
-
+    
     percussion[tid, 0] = p_0 * offset_sigmoid(-c_0, 500.0, 2.2)
     percussion[tid, 1] = p_1 * offset_sigmoid(-c_1, 500.0, 2.2)
     percussion[tid, 2] = p_2 * offset_sigmoid(-c_2, 500.0, 2.2)
