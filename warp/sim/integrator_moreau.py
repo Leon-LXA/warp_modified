@@ -195,6 +195,7 @@ def jcalc_tau(
     target_k_d: float,
     limit_k_e: float,
     limit_k_d: float,
+    max_torque: float,
     joint_S_s: wp.array(dtype=wp.spatial_vector),
     joint_q: wp.array(dtype=float),
     joint_qd: wp.array(dtype=float),
@@ -231,17 +232,17 @@ def jcalc_tau(
         damping_f = (0.0 - limit_k_d) * qd
 
         # total torque / force on the joint
-        t = (
-            0.0
-            - wp.spatial_dot(S_s, body_f_s)
-            - target_k_e * (q - target)
+        t_1 = 0.0 - wp.spatial_dot(S_s, body_f_s)
+        t_2 = wp.clamp( 
+            0.0 - target_k_e * (q - target)
             - target_k_d * qd
             + act
             + limit_f
-            + damping_f
-        )
+            + damping_f, 
+            0.0-max_torque, 
+            max_torque)
 
-        tau[dof_start] = t
+        tau[dof_start] = t_1 + t_2
 
     # ball
     if type == 2:
@@ -483,6 +484,7 @@ def compute_link_tau(
     joint_target: wp.array(dtype=float),
     joint_target_ke: wp.array(dtype=float),
     joint_target_kd: wp.array(dtype=float),
+    max_torque: float,
     joint_limit_lower: wp.array(dtype=float),
     joint_limit_upper: wp.array(dtype=float),
     joint_limit_ke: wp.array(dtype=float),
@@ -520,6 +522,7 @@ def compute_link_tau(
         target_k_d,
         limit_k_e,
         limit_k_d,
+        max_torque,
         joint_S_s,
         joint_q,
         joint_qd,
@@ -646,6 +649,7 @@ def eval_rigid_tau(
     joint_limit_upper: wp.array(dtype=float),
     joint_limit_ke: wp.array(dtype=float),
     joint_limit_kd: wp.array(dtype=float),
+    max_torque: float,
     joint_axis: wp.array(dtype=wp.vec3),
     joint_S_s: wp.array(dtype=wp.spatial_vector),
     body_fb_s: wp.array(dtype=wp.spatial_vector),
@@ -675,6 +679,7 @@ def eval_rigid_tau(
             joint_target,
             joint_target_ke,
             joint_target_kd,
+            max_torque,
             joint_limit_lower,
             joint_limit_upper,
             joint_limit_ke,
@@ -1301,6 +1306,7 @@ def prox_iteration_unrolled_soft(
     c_vec: wp.array2d(dtype=wp.vec3),
     mu: float,
     prox_iter: int,
+    scale: float,
     percussion: wp.array2d(dtype=wp.vec3),
 ):
     tid = wp.tid()
@@ -1436,10 +1442,10 @@ def prox_iteration_unrolled_soft(
             if mu * p_3[1] < fm:
                 p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
     
-    percussion[tid, 0] = p_0 * offset_sigmoid(-c_0, 500.0, 2.2)
-    percussion[tid, 1] = p_1 * offset_sigmoid(-c_1, 500.0, 2.2)
-    percussion[tid, 2] = p_2 * offset_sigmoid(-c_2, 500.0, 2.2)
-    percussion[tid, 3] = p_3 * offset_sigmoid(-c_3, 500.0, 2.2)
+    percussion[tid, 0] = p_0 * offset_sigmoid(-c_0, scale, 2.2)
+    percussion[tid, 1] = p_1 * offset_sigmoid(-c_1, scale, 2.2)
+    percussion[tid, 2] = p_2 * offset_sigmoid(-c_2, scale, 2.2)
+    percussion[tid, 3] = p_3 * offset_sigmoid(-c_3, scale, 2.2)
 
 
 @wp.kernel
@@ -1593,7 +1599,7 @@ class SemiImplicitMoreauIntegrator:
         pass
 
     def simulate(
-        self, model, state_in, state_mid, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10
+        self, model, state_in, state_mid, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10, sigmoid_scale=500.0, max_torque=1000.0
     ):
         # integrate position with euler half a step
         # kernel 25 / 20
@@ -1689,6 +1695,7 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_limit_upper,
                 model.joint_limit_ke,
                 model.joint_limit_kd,
+                max_torque,
                 model.joint_axis,
                 state_mid.joint_S_s,
                 state_mid.body_f_s,
@@ -1701,7 +1708,7 @@ class SemiImplicitMoreauIntegrator:
         self.eval_contact_quantities(model, state_in, state_mid, dt)
 
         # prox iteration
-        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter)
+        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter, sigmoid_scale)
 
         # recompute tau with contact forces
         # kernel 5
@@ -1724,6 +1731,7 @@ class SemiImplicitMoreauIntegrator:
                 model.joint_limit_upper,
                 model.joint_limit_ke,
                 model.joint_limit_kd,
+                max_torque,
                 model.joint_axis,
                 state_mid.joint_S_s,
                 state_mid.body_f_s,
@@ -2322,7 +2330,7 @@ class SemiImplicitMoreauIntegrator:
             device=model.device,
         )
 
-    def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter):
+    def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter, sigmoid_scale):
         # prox iteration
         # kernel 7
         # wp.launch(
@@ -2335,7 +2343,7 @@ class SemiImplicitMoreauIntegrator:
         wp.launch(
             kernel=prox_iteration_unrolled_soft,
             dim=model.articulation_count,
-            inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter],
+            inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter, sigmoid_scale],
             outputs=[state_mid.percussion],
             device=model.device,
         )

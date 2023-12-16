@@ -370,6 +370,7 @@ def jcalc_tau(
     target_k_d: float,
     limit_k_e: float,
     limit_k_d: float,
+    max_torque: float,
     joint_S_s: wp.array(dtype=wp.spatial_vector), 
     joint_q: wp.array(dtype=float),
     joint_qd: wp.array(dtype=float),
@@ -406,10 +407,10 @@ def jcalc_tau(
         damping_f = (0.0 - limit_k_d) * qd
 
         # total torque / force on the joint
-        t = 0.0 - wp.spatial_dot(S_s, body_f_s) - target_k_e*(q - target) - target_k_d*qd + act + limit_f + damping_f
+        t_1 = 0.0 - wp.spatial_dot(S_s, body_f_s) 
+        t_2 = wp.clamp(0.0 - target_k_e*(q - target) - target_k_d*qd + act + limit_f + damping_f, 0.0-max_torque, max_torque)
 
-
-        tau[dof_start] = t
+        tau[dof_start] = t_1 + t_2
 
     # ball
     if (type == 2):
@@ -707,6 +708,7 @@ def compute_link_tau(offset: int,
                      joint_limit_upper: wp.array(dtype=float),
                      joint_limit_ke: wp.array(dtype=float),
                      joint_limit_kd: wp.array(dtype=float),
+                     max_torque: float,
                      joint_S_s: wp.array(dtype=wp.spatial_vector),
                      body_fb_s: wp.array(dtype=wp.spatial_vector),
                      # outputs
@@ -734,7 +736,7 @@ def compute_link_tau(offset: int,
     f_s = f_b_s + f_t_s
 
     # compute joint-space forces, writes out tau
-    jcalc_tau(type, target_k_e, target_k_d, limit_k_e, limit_k_d, joint_S_s, joint_q, joint_qd, joint_act, joint_target, joint_limit_lower, joint_limit_upper, coord_start, dof_start, f_s, tau)
+    jcalc_tau(type, target_k_e, target_k_d, limit_k_e, limit_k_d, max_torque, joint_S_s, joint_q, joint_qd, joint_act, joint_target, joint_limit_lower, joint_limit_upper, coord_start, dof_start, f_s, tau)
 
     # update parent forces, todo: check that this is valid for the backwards pass
     if (parent >= 0):
@@ -843,6 +845,7 @@ def eval_rigid_tau(articulation_start: wp.array(dtype=int),
                   joint_limit_upper: wp.array(dtype=float),
                   joint_limit_ke: wp.array(dtype=float),
                   joint_limit_kd: wp.array(dtype=float),
+                  max_torque: float,
                   joint_axis: wp.array(dtype=wp.vec3),
                   joint_S_s: wp.array(dtype=wp.spatial_vector),
                   body_fb_s: wp.array(dtype=wp.spatial_vector),                  
@@ -876,6 +879,7 @@ def eval_rigid_tau(articulation_start: wp.array(dtype=int),
             joint_limit_upper,
             joint_limit_ke,
             joint_limit_kd,
+            max_torque,
             joint_S_s,
             body_fb_s,
             body_ft_s,
@@ -1186,7 +1190,7 @@ class SemiImplicitArticulationIntegrator:
             device=model.device,
             )
 
-    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=False, alpha = 1.0):
+    def simulate(self, model, state_in, state_out, dt, requires_grad=True, update_mass_matrix=False, alpha = 1.0, max_torque=1000.0):
         if (model.ground and model.rigid_contact_max > 0):
             # evaluate contact forces
             wp.launch(
@@ -1229,6 +1233,7 @@ class SemiImplicitArticulationIntegrator:
                 model.joint_limit_upper,
                 model.joint_limit_ke,
                 model.joint_limit_kd,
+                max_torque,
                 model.joint_axis,
                 state_in.joint_S_s,
                 state_in.body_f_s 
