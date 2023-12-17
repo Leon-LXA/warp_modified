@@ -2333,20 +2333,20 @@ class SemiImplicitMoreauIntegrator:
     def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter, sigmoid_scale):
         # prox iteration
         # kernel 7
-        # wp.launch(
-        #     kernel=prox_iteration_unrolled,
-        #     dim=model.articulation_count,
-        #     inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
-        #     outputs=[state_mid.percussion],
-        #     device=model.device,
-        # )
         wp.launch(
-            kernel=prox_iteration_unrolled_soft,
+            kernel=prox_iteration_unrolled,
             dim=model.articulation_count,
-            inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter, sigmoid_scale],
+            inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
             outputs=[state_mid.percussion],
             device=model.device,
         )
+        # wp.launch(
+        #     kernel=prox_iteration_unrolled_soft,
+        #     dim=model.articulation_count,
+        #     inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter, sigmoid_scale],
+        #     outputs=[state_mid.percussion],
+        #     device=model.device,
+        # )
 
         # # vectorize percussion
         # wp.launch(
