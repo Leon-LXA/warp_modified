@@ -253,7 +253,7 @@ def parse_urdf(
             I_m[2, 0] = I_m[0, 2]
             I_m[2, 1] = I_m[1, 2]
             rot = wp.quat_to_matrix(inertial_frame.q)
-            assert np.allclose(rot, np.eye(3)), "rotated inertial frames not supported"
+            assert np.allclose(np.array(rot).reshape((3, 3)), np.eye(3)), "rotated inertial frames not supported"
             # I_m = rot @ I_m
             m = float(inertial.find("mass").get("value") or "0")
             builder.body_mass[link] = m
