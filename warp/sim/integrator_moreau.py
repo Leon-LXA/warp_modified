@@ -69,6 +69,99 @@ def spatial_transform_inertia(t: wp.transform, I: wp.spatial_matrix):
     return wp.mul(wp.mul(wp.transpose(T), I), T)
 
 
+@wp.kernel
+def eval_rigid_contacts_art(
+    beta: float,
+    contact_count: wp.array(dtype=int),
+    body_X_s: wp.array(dtype=wp.transform),
+    body_v_s: wp.array(dtype=wp.spatial_vector),
+    contact_body: wp.array(dtype=int),
+    contact_point: wp.array(dtype=wp.vec3),
+    contact_shape: wp.array(dtype=int),
+    shape_materials: ModelShapeMaterials,
+    geo: ModelShapeGeometry,
+    body_f_s: wp.array(dtype=wp.spatial_vector),
+):
+
+    tid = wp.tid()
+
+    count = contact_count[0]
+    if tid >= count:
+        return
+
+    c_body = contact_body[tid]
+    c_point = contact_point[tid]
+    c_shape = contact_shape[tid]
+    c_dist = geo.thickness[c_shape]
+
+    # hard coded surface parameter tensor layout (ke, kd, kf, mu)
+    ke = shape_materials.ke[c_shape]
+    kd = shape_materials.kd[c_shape]
+    kf = shape_materials.kf[c_shape]
+    mu = shape_materials.mu[c_shape]
+
+    X_s = body_X_s[c_body]  # position of colliding body
+    v_s = body_v_s[c_body]  # orientation of colliding body
+
+    n = wp.vec3(0.0, 1.0, 0.0)
+
+    # transform point to world space
+    p = wp.transform_point(X_s, c_point) - n * c_dist  # add on 'thickness' of shape, e.g.: radius of sphere/capsule
+
+    w = wp.spatial_top(v_s)
+    v = wp.spatial_bottom(v_s)
+
+    # contact point velocity
+    dpdt = v + wp.cross(w, p)
+
+    # check ground contact
+    c = wp.dot(n, p)  # check if we're inside the ground
+
+    if c >= 0.0:
+        return
+
+    vn = wp.dot(n, dpdt)  # velocity component out of the ground
+    vt = dpdt - n * vn  # velocity component not into the ground
+
+    fn = compute_normal_force(c, ke)  # normal force (restitution coefficient * how far inside for ground)
+
+    # contact damping
+    fd = compute_damping_force(vn, kd, c)
+
+    # viscous friction
+    # ft = vt*kf
+
+    # Coulomb friction (box)
+    # lower = mu * (fn + fd)   # negative
+    # upper = 0.0 - lower      # positive, workaround for no unary ops
+
+    # vx = wp.clamp(wp.dot(wp.vec3(kf, 0.0, 0.0), vt), lower, upper)
+    # vz = wp.clamp(wp.dot(wp.vec3(0.0, 0.0, kf), vt), lower, upper)
+
+    # Coulomb friction (smooth, but gradients are numerically unstable around |vt| = 0)
+    ft = compute_friction_force(vt, mu, kf, fn, fd)
+
+    f_total = (n * (fn + fd) + ft) * beta
+    t_total = (wp.cross(p, f_total)) * beta
+
+    wp.atomic_add(body_f_s, c_body, wp.spatial_vector(t_total, f_total))
+
+
+@wp.func
+def compute_normal_force(c: float, ke: float):
+    return c * ke
+
+
+@wp.func
+def compute_damping_force(vn: float, kd: float, c: float):
+    return wp.min(vn, 0.0) * kd * wp.step(c)  # * (0.0 - c)
+
+
+@wp.func
+def compute_friction_force(vt: wp.vec3, mu: float, kf: float, fn: float, fd: float):
+    return wp.normalize(vt) * wp.min(kf * wp.length(vt), 0.0 - mu * (fn + fd))  # * wp.step(c)
+
+
 # compute transform across a joint
 @wp.func
 def jcalc_transform(type: int, axis: wp.vec3, joint_q: wp.array(dtype=float), start: int):
@@ -233,14 +326,9 @@ def jcalc_tau(
 
         # total torque / force on the joint
         t_1 = 0.0 - wp.spatial_dot(S_s, body_f_s)
-        t_2 = wp.clamp( 
-            0.0 - target_k_e * (q - target)
-            - target_k_d * qd
-            + act
-            + limit_f
-            + damping_f, 
-            0.0-max_torque, 
-            max_torque)
+        t_2 = wp.clamp(
+            0.0 - target_k_e * (q - target) - target_k_d * qd + act + limit_f + damping_f, 0.0 - max_torque, max_torque
+        )
 
         tau[dof_start] = t_1 + t_2
 
@@ -1312,11 +1400,11 @@ def prox_iteration_unrolled_soft(
     tid = wp.tid()
 
     n = wp.vec3(0.0, 1.0, 0.0)
-    point_0 = point_vec[tid*4]
-    point_1 = point_vec[tid*4+1]
-    point_2 = point_vec[tid*4+2]
-    point_3 = point_vec[tid*4+3]
-    c_0 = wp.clamp(wp.dot(n, point_0), -1.0, 0.1) # clamp for stability (exp gradients)
+    point_0 = point_vec[tid * 4]
+    point_1 = point_vec[tid * 4 + 1]
+    point_2 = point_vec[tid * 4 + 2]
+    point_3 = point_vec[tid * 4 + 3]
+    c_0 = wp.clamp(wp.dot(n, point_0), -1.0, 0.1)  # clamp for stability (exp gradients)
     c_1 = wp.clamp(wp.dot(n, point_1), -1.0, 0.1)
     c_2 = wp.clamp(wp.dot(n, point_2), -1.0, 0.1)
     c_3 = wp.clamp(wp.dot(n, point_3), -1.0, 0.1)
@@ -1441,7 +1529,7 @@ def prox_iteration_unrolled_soft(
             fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
             if mu * p_3[1] < fm:
                 p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
-    
+
     percussion[tid, 0] = p_0 * offset_sigmoid(-c_0, scale, 2.2)
     percussion[tid, 1] = p_1 * offset_sigmoid(-c_1, scale, 2.2)
     percussion[tid, 2] = p_2 * offset_sigmoid(-c_2, scale, 2.2)
@@ -1501,6 +1589,7 @@ def vectorize_percussion(percussion: wp.array2d(dtype=wp.vec3), percussion_vec: 
 
 @wp.kernel
 def p_to_f_s(
+    beta: float,
     c_body_vec: wp.array(dtype=int),
     point_vec: wp.array(dtype=wp.vec3),
     percussion: wp.array2d(dtype=wp.vec3),
@@ -1510,8 +1599,8 @@ def p_to_f_s(
     tid = wp.tid()
 
     for i in range(4):
-        f = -percussion[tid, i] / dt
-        t = wp.cross(point_vec[tid * 4 + i], f)
+        f = (-percussion[tid, i] / dt) * (1 - beta)
+        t = (wp.cross(point_vec[tid * 4 + i], f)) * (1 - beta)
         wp.atomic_add(body_f_s, c_body_vec[tid * 4 + i], wp.spatial_vector(t, f))
 
 
@@ -1599,7 +1688,20 @@ class SemiImplicitMoreauIntegrator:
         pass
 
     def simulate(
-        self, model, state_in, state_mid, state_out, dt, mu, requires_grad=True, update_mass_matrix=False, prox_iter=10, sigmoid_scale=500.0, max_torque=1000.0
+        self,
+        model,
+        state_in,
+        state_mid,
+        state_out,
+        dt,
+        mu,
+        requires_grad,
+        update_mass_matrix,
+        prox_iter,
+        sigmoid_scale,
+        beta,
+        max_torque,
+        mode,
     ):
         # integrate position with euler half a step
         # kernel 25 / 20
@@ -1708,7 +1810,7 @@ class SemiImplicitMoreauIntegrator:
         self.eval_contact_quantities(model, state_in, state_mid, dt)
 
         # prox iteration
-        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter, sigmoid_scale)
+        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter, sigmoid_scale, beta, mode)
 
         # recompute tau with contact forces
         # kernel 5
@@ -2330,23 +2432,50 @@ class SemiImplicitMoreauIntegrator:
             device=model.device,
         )
 
-    def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter, sigmoid_scale):
+    def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter, sigmoid_scale, beta, mode):
         # prox iteration
         # kernel 7
-        wp.launch(
-            kernel=prox_iteration_unrolled,
-            dim=model.articulation_count,
-            inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
-            outputs=[state_mid.percussion],
-            device=model.device,
-        )
-        # wp.launch(
-        #     kernel=prox_iteration_unrolled_soft,
-        #     dim=model.articulation_count,
-        #     inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter, sigmoid_scale],
-        #     outputs=[state_mid.percussion],
-        #     device=model.device,
-        # )
+        if mode == "hard":
+            wp.launch(
+                kernel=prox_iteration_unrolled,
+                dim=model.articulation_count,
+                inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
+                outputs=[state_mid.percussion],
+                device=model.device,
+            )
+        elif mode == "soft":
+            wp.launch(
+                kernel=prox_iteration_unrolled_soft,
+                dim=model.articulation_count,
+                inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter, sigmoid_scale],
+                outputs=[state_mid.percussion],
+                device=model.device,
+            )
+        elif mode == "mixed":
+            wp.launch(
+                kernel=prox_iteration_unrolled,
+                dim=model.articulation_count,
+                inputs=[model.G_mat, state_mid.c_vec, mu, prox_iter],
+                outputs=[state_mid.percussion],
+                device=model.device,
+            )
+            wp.launch(
+                kernel=eval_rigid_contacts_art,
+                dim=model.rigid_contact_max,
+                inputs=[
+                    beta,
+                    model.rigid_contact_count,
+                    state_mid.body_X_sc,
+                    state_mid.body_v_s,
+                    model.rigid_contact_body0,
+                    model.rigid_contact_point0,
+                    model.rigid_contact_shape0,
+                    model.shape_materials,
+                    model.shape_geo,
+                ],
+                outputs=[state_mid.body_f_s],
+                device=model.device,
+            )
 
         # # vectorize percussion
         # wp.launch(
@@ -2393,10 +2522,12 @@ class SemiImplicitMoreauIntegrator:
 
         # map p to body forces
         # kernel 6
+        if mode != "mixed":
+            beta = 0.0
         wp.launch(
             kernel=p_to_f_s,
             dim=model.articulation_count,
-            inputs=[model.c_body_vec, state_mid.point_vec, state_mid.percussion, dt],
+            inputs=[beta, model.c_body_vec, state_mid.point_vec, state_mid.percussion, dt],
             outputs=[state_mid.body_f_s],
             device=model.device,
         )
