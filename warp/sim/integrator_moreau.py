@@ -1599,8 +1599,8 @@ def p_to_f_s(
     tid = wp.tid()
 
     for i in range(4):
-        f = (-percussion[tid, i] / dt) * (1 - beta)
-        t = (wp.cross(point_vec[tid * 4 + i], f)) * (1 - beta)
+        f = (-percussion[tid, i] / dt) * (1.0 - beta)
+        t = (wp.cross(point_vec[tid * 4 + i], f)) * (1.0 - beta)
         wp.atomic_add(body_f_s, c_body_vec[tid * 4 + i], wp.spatial_vector(t, f))
 
 
@@ -2476,6 +2476,8 @@ class SemiImplicitMoreauIntegrator:
                 outputs=[state_mid.body_f_s],
                 device=model.device,
             )
+        else:
+            raise ValueError("Invalid mode")
 
         # # vectorize percussion
         # wp.launch(
