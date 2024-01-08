@@ -17,7 +17,7 @@ from .model import ModelShapeGeometry, ModelShapeMaterials
 
 @wp.func
 def offset_sigmoid(x: float, scale: float, offset: float):
-    return (1.0 / (1.0 + wp.exp(wp.clamp(x * scale - offset, -100, 80)))) / 0.9 # clamp for stability (exp gradients)
+    return (1.0 / (1.0 + wp.exp(wp.clamp(x * scale - offset, -100.0, 50.0)))) / 0.9 # clamp for stability (exp gradients) unstable from around 85
 
 
 # # Frank & Park definition 3.20, pg 100
