@@ -1124,7 +1124,7 @@ def construct_contact_jacobian(
             # check ground contact
             c = wp.dot(n, p)
 
-            if c <= 0.0:
+            if c <= 1.0:
                 # Jc = J_p - skew(p)*J_r
                 for j in range(0, 3):  # iterate all contact dofs
                     for k in range(0, dof_count):  # iterate all joint dofs
@@ -1393,11 +1393,12 @@ def prox_iteration_unrolled_soft(
     c_vec: wp.array2d(dtype=wp.vec3),
     mu: float,
     prox_iter: int,
-    scale: float,
+    scale_array: wp.array(dtype=float),
     percussion: wp.array2d(dtype=wp.vec3),
 ):
     tid = wp.tid()
 
+    scale = scale_array[0]
     n = wp.vec3(0.0, 1.0, 0.0)
     point_0 = point_vec[tid * 4]
     point_1 = point_vec[tid * 4 + 1]
@@ -1428,11 +1429,11 @@ def prox_iteration_unrolled_soft(
 
         sum += G_mat[tid, 0, 0] * p_0
         r_sum += wp.determinant(G_mat[tid, 0, 0])
-        sum += G_mat[tid, 0, 1] * p_1
+        sum += G_mat[tid, 0, 1] * p_1 * offset_sigmoid(-c_1, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 0, 1])
-        sum += G_mat[tid, 0, 2] * p_2
+        sum += G_mat[tid, 0, 2] * p_2 * offset_sigmoid(-c_2, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 0, 2])
-        sum += G_mat[tid, 0, 3] * p_3
+        sum += G_mat[tid, 0, 3] * p_3 * offset_sigmoid(-c_3, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 0, 3])
 
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
@@ -1453,13 +1454,13 @@ def prox_iteration_unrolled_soft(
         sum = wp.vec3(0.0, 0.0, 0.0)
         r_sum = 0.0
 
-        sum += G_mat[tid, 1, 0] * p_0
+        sum += G_mat[tid, 1, 0] * p_0 * offset_sigmoid(-c_0, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 1, 0])
         sum += G_mat[tid, 1, 1] * p_1
         r_sum += wp.determinant(G_mat[tid, 1, 1])
-        sum += G_mat[tid, 1, 2] * p_2
+        sum += G_mat[tid, 1, 2] * p_2 * offset_sigmoid(-c_2, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 1, 2])
-        sum += G_mat[tid, 1, 3] * p_3
+        sum += G_mat[tid, 1, 3] * p_3 * offset_sigmoid(-c_3, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 1, 3])
 
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
@@ -1480,13 +1481,13 @@ def prox_iteration_unrolled_soft(
         sum = wp.vec3(0.0, 0.0, 0.0)
         r_sum = 0.0
 
-        sum += G_mat[tid, 2, 0] * p_0
+        sum += G_mat[tid, 2, 0] * p_0 * offset_sigmoid(-c_0, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 2, 0])
-        sum += G_mat[tid, 2, 1] * p_1
+        sum += G_mat[tid, 2, 1] * p_1 * offset_sigmoid(-c_1, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 2, 1])
         sum += G_mat[tid, 2, 2] * p_2
         r_sum += wp.determinant(G_mat[tid, 2, 2])
-        sum += G_mat[tid, 2, 3] * p_3
+        sum += G_mat[tid, 2, 3] * p_3 * offset_sigmoid(-c_3, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 2, 3])
 
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
@@ -1507,11 +1508,11 @@ def prox_iteration_unrolled_soft(
         sum = wp.vec3(0.0, 0.0, 0.0)
         r_sum = 0.0
 
-        sum += G_mat[tid, 3, 0] * p_0
+        sum += G_mat[tid, 3, 0] * p_0 * offset_sigmoid(-c_0, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 3, 0])
-        sum += G_mat[tid, 3, 1] * p_1
+        sum += G_mat[tid, 3, 1] * p_1 * offset_sigmoid(-c_1, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 3, 1])
-        sum += G_mat[tid, 3, 2] * p_2
+        sum += G_mat[tid, 3, 2] * p_2 * offset_sigmoid(-c_2, scale, 2.2)
         r_sum += wp.determinant(G_mat[tid, 3, 2])
         sum += G_mat[tid, 3, 3] * p_3
         r_sum += wp.determinant(G_mat[tid, 3, 3])
@@ -1698,7 +1699,6 @@ class MoreauIntegrator:
         requires_grad,
         update_mass_matrix,
         prox_iter,
-        sigmoid_scale,
         beta,
         max_torque,
         mode,
@@ -1810,7 +1810,7 @@ class MoreauIntegrator:
         self.eval_contact_quantities(model, state_in, state_mid, dt)
 
         # prox iteration
-        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter, sigmoid_scale, beta, mode)
+        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter, beta, mode)
 
         # recompute tau with contact forces
         # kernel 5
@@ -2432,7 +2432,7 @@ class MoreauIntegrator:
             device=model.device,
         )
 
-    def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter, sigmoid_scale, beta, mode):
+    def eval_contact_forces(self, model, state_mid, dt, mu, prox_iter, beta, mode):
         # prox iteration
         # kernel 7
         if mode == "hard":
@@ -2447,7 +2447,7 @@ class MoreauIntegrator:
             wp.launch(
                 kernel=prox_iteration_unrolled_soft,
                 dim=model.articulation_count,
-                inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter, sigmoid_scale],
+                inputs=[state_mid.point_vec, model.G_mat, state_mid.c_vec, mu, prox_iter, model.sigmoid_scale],
                 outputs=[state_mid.percussion],
                 device=model.device,
             )
