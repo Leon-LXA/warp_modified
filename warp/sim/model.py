@@ -263,6 +263,7 @@ class State:
             self.body_ft_s.zero_()
             self.tmp.zero_()
             self.tmp_inv_m_times_h.zero_()
+            self.Jc.zero_()
 
     def flatten(self):
         wp.utils.warn(
@@ -751,6 +752,12 @@ class Model:
             s.tmp_11 = wp.zeros_like(self.joint_qd, requires_grad=True)
             s.tmp_12 = wp.zeros_like(self.joint_qd, requires_grad=True)
 
+            s.Jc = wp.zeros(self.Jc_size, dtype=wp.float32, requires_grad=True)
+            s.G = wp.zeros(self.G_size, dtype=wp.float32, requires_grad=True)
+            s.G_mat = wp.zeros((self.articulation_count,4,4), dtype=wp.mat33, requires_grad=True)
+
+            s.toi = wp.zeros(self.articulation_count, dtype=wp.float32, requires_grad=True)
+
         return s
 
     def allocate_soft_contacts(self, count, requires_grad=False):
@@ -771,10 +778,8 @@ class Model:
             self.H = wp.empty(self.H_size, dtype=wp.float32, requires_grad=True)
             self.L = wp.zeros(self.H_size, dtype=wp.float32,requires_grad=True)
             self.Jc = wp.zeros(self.Jc_size, dtype=wp.float32, requires_grad=True)
-            self.Inv_M_times_Jc_t = wp.zeros(self.Jc_size, dtype=wp.float32, requires_grad=True)
             self.G = wp.zeros(self.G_size, dtype=wp.float32, requires_grad=True)
             self.G_mat = wp.zeros((self.articulation_count,4,4), dtype=wp.mat33, requires_grad=True)
-            self.TMP = wp.zeros(self.Jc_size, requires_grad=True)
 
     def find_shape_contact_pairs(self):
         # find potential contact pairs based on collision groups and collision mask (pairwise filtering)

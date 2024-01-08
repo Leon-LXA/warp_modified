@@ -43,7 +43,9 @@ from .integrator_xpbd import XPBDIntegrator
 
 from .integrator_articulation import SemiImplicitArticulationIntegrator
 
-from .integrator_moreau import SemiImplicitMoreauIntegrator
+from .integrator_moreau import MoreauIntegrator
+
+from .integrator_toi import TOIIntegrator
 
 from .collide import collide
 from .articulation import eval_fk, eval_ik
