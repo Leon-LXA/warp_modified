@@ -4094,6 +4094,7 @@ class ModelBuilder:
             m.joint_dof_count = self.joint_dof_count
             m.joint_coord_count = self.joint_coord_count
             m.sigmoid_scale = wp.zeros(1, dtype=wp.float32, requires_grad=requires_grad)
+            m.col_height = 0.0
 
             # store refs to geometry
             m.geo_meshes = self.geo_meshes

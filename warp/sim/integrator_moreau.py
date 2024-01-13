@@ -1097,6 +1097,7 @@ def construct_contact_jacobian(
     contact_point: wp.array(dtype=wp.vec3),
     contact_shape: wp.array(dtype=int),
     geo: ModelShapeGeometry,
+    col_height: float,
     Jc: wp.array(dtype=float),
     c_body_vec: wp.array(dtype=int),
     point_vec: wp.array(dtype=wp.vec3),
@@ -1124,7 +1125,7 @@ def construct_contact_jacobian(
             # check ground contact
             c = wp.dot(n, p)
 
-            if c <= 1.0:
+            if c <= col_height:
                 # Jc = J_p - skew(p)*J_r
                 for j in range(0, 3):  # iterate all contact dofs
                     for k in range(0, dof_count):  # iterate all joint dofs
@@ -1248,29 +1249,8 @@ def prox_iteration(
                         percussion[tid, i][2] * mu * percussion[tid, i][1] / fm,
                     )
 
-
-@wp.kernel
-def prox_iteration_unrolled(
-    G_mat: wp.array3d(dtype=wp.mat33),
-    c_vec: wp.array2d(dtype=wp.vec3),
-    mu: float,
-    prox_iter: int,
-    percussion: wp.array2d(dtype=wp.vec3),
-):
-    tid = wp.tid()
-
-    # initialize percussions with steady state
-    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec[tid, 0]
-    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec[tid, 1]
-    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec[tid, 2]
-    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec[tid, 3]
-    # overwrite percussions with steady state only in normal direction
-    # p_0 = wp.vec3(0.0, p_0[1], 0.0)
-    # p_1 = wp.vec3(0.0, p_1[1], 0.0)
-    # p_2 = wp.vec3(0.0, p_2[1], 0.0)
-    # p_3 = wp.vec3(0.0, p_3[1], 0.0)
-
-    # # solve percussions iteratively
+@wp.func
+def prox_loop(tid: int, G_mat: wp.array3d(dtype=wp.mat33), c_vec_0: wp.vec3, c_vec_1: wp.vec3, c_vec_2: wp.vec3, c_vec_3: wp.vec3, mu: float, prox_iter: int, p_0: wp.vec3, p_1: wp.vec3, p_2: wp.vec3, p_3: wp.vec3):
     for it in range(prox_iter):
         # CONTACT 0
         # calculate sum(G_ij*p_j) and sum over det(G_ij)
@@ -1289,7 +1269,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_0 = p_0 - r * (sum + c_vec[tid, 0])
+        p_0 = p_0 - r * (sum + c_vec_0)
 
         # projection to friction cone
         if p_0[1] <= 0.0:
@@ -1316,7 +1296,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_1 = p_1 - r * (sum + c_vec[tid, 1])
+        p_1 = p_1 - r * (sum + c_vec_1)
 
         # projection to friction cone
         if p_1[1] <= 0.0:
@@ -1343,7 +1323,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_2 = p_2 - r * (sum + c_vec[tid, 2])
+        p_2 = p_2 - r * (sum + c_vec_2)
 
         # projection to friction cone
         if p_2[1] <= 0.0:
@@ -1370,7 +1350,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_3 = p_3 - r * (sum + c_vec[tid, 3])
+        p_3 = p_3 - r * (sum + c_vec_3)
 
         # projection to friction cone
         if p_3[1] <= 0.0:
@@ -1379,6 +1359,146 @@ def prox_iteration_unrolled(
             fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
             if mu * p_3[1] < fm:
                 p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
+    
+    return p_0, p_1, p_2, p_3
+
+@wp.kernel
+def prox_iteration_unrolled(
+    G_mat: wp.array3d(dtype=wp.mat33),
+    c_vec: wp.array2d(dtype=wp.vec3),
+    mu: float,
+    prox_iter: int,
+    percussion: wp.array2d(dtype=wp.vec3),
+):
+    tid = wp.tid()
+
+    c_vec_0 = c_vec[tid, 0]
+    c_vec_1 = c_vec[tid, 1]
+    c_vec_2 = c_vec[tid, 2]
+    c_vec_3 = c_vec[tid, 3]
+
+    # initialize percussions with steady state
+    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec_0
+    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec_1
+    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec_2
+    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec_3
+    # overwrite percussions with steady state only in normal direction
+    # p_0 = wp.vec3(0.0, p_0[1], 0.0)
+    # p_1 = wp.vec3(0.0, p_1[1], 0.0)
+    # p_2 = wp.vec3(0.0, p_2[1], 0.0)
+    # p_3 = wp.vec3(0.0, p_3[1], 0.0)
+
+    # # solve percussions iteratively
+    # for it in range(prox_iter):
+    #     # CONTACT 0
+    #     # calculate sum(G_ij*p_j) and sum over det(G_ij)
+    #     sum = wp.vec3(0.0, 0.0, 0.0)
+    #     r_sum = 0.0
+
+    #     sum += G_mat[tid, 0, 0] * p_0
+    #     r_sum += wp.determinant(G_mat[tid, 0, 0])
+    #     sum += G_mat[tid, 0, 1] * p_1
+    #     r_sum += wp.determinant(G_mat[tid, 0, 1])
+    #     sum += G_mat[tid, 0, 2] * p_2
+    #     r_sum += wp.determinant(G_mat[tid, 0, 2])
+    #     sum += G_mat[tid, 0, 3] * p_3
+    #     r_sum += wp.determinant(G_mat[tid, 0, 3])
+
+    #     r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+    #     # update percussion
+    #     p_0 = p_0 - r * (sum + c_vec_0)
+
+    #     # projection to friction cone
+    #     if p_0[1] <= 0.0:
+    #         p_0 = wp.vec3(0.0, 0.0, 0.0)
+    #     elif p_0[0] != 0.0 or p_0[2] != 0.0:
+    #         fm = wp.sqrt(p_0[0] ** 2.0 + p_0[2] ** 2.0)  # friction magnitude
+    #         if mu * p_0[1] < fm:
+    #             p_0 = wp.vec3(p_0[0] * mu * p_0[1] / fm, p_0[1], p_0[2] * mu * p_0[1] / fm)
+
+    #     # CONTACT 1
+    #     # calculate sum(G_ij*p_j) and sum over det(G_ij)
+    #     sum = wp.vec3(0.0, 0.0, 0.0)
+    #     r_sum = 0.0
+
+    #     sum += G_mat[tid, 1, 0] * p_0
+    #     r_sum += wp.determinant(G_mat[tid, 1, 0])
+    #     sum += G_mat[tid, 1, 1] * p_1
+    #     r_sum += wp.determinant(G_mat[tid, 1, 1])
+    #     sum += G_mat[tid, 1, 2] * p_2
+    #     r_sum += wp.determinant(G_mat[tid, 1, 2])
+    #     sum += G_mat[tid, 1, 3] * p_3
+    #     r_sum += wp.determinant(G_mat[tid, 1, 3])
+
+    #     r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+    #     # update percussion
+    #     p_1 = p_1 - r * (sum + c_vec_1)
+
+    #     # projection to friction cone
+    #     if p_1[1] <= 0.0:
+    #         p_1 = wp.vec3(0.0, 0.0, 0.0)
+    #     elif p_1[0] != 0.0 or p_1[2] != 0.0:
+    #         fm = wp.sqrt(p_1[0] ** 2.0 + p_1[2] ** 2.0)  # friction magnitude
+    #         if mu * p_1[1] < fm:
+    #             p_1 = wp.vec3(p_1[0] * mu * p_1[1] / fm, p_1[1], p_1[2] * mu * p_1[1] / fm)
+
+    #     # CONTACT 2
+    #     # calculate sum(G_ij*p_j) and sum over det(G_ij)
+    #     sum = wp.vec3(0.0, 0.0, 0.0)
+    #     r_sum = 0.0
+
+    #     sum += G_mat[tid, 2, 0] * p_0
+    #     r_sum += wp.determinant(G_mat[tid, 2, 0])
+    #     sum += G_mat[tid, 2, 1] * p_1
+    #     r_sum += wp.determinant(G_mat[tid, 2, 1])
+    #     sum += G_mat[tid, 2, 2] * p_2
+    #     r_sum += wp.determinant(G_mat[tid, 2, 2])
+    #     sum += G_mat[tid, 2, 3] * p_3
+    #     r_sum += wp.determinant(G_mat[tid, 2, 3])
+
+    #     r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+    #     # update percussion
+    #     p_2 = p_2 - r * (sum + c_vec_2)
+
+    #     # projection to friction cone
+    #     if p_2[1] <= 0.0:
+    #         p_2 = wp.vec3(0.0, 0.0, 0.0)
+    #     elif p_2[0] != 0.0 or p_2[2] != 0.0:
+    #         fm = wp.sqrt(p_2[0] ** 2.0 + p_2[2] ** 2.0)  # friction magnitude
+    #         if mu * p_2[1] < fm:
+    #             p_2 = wp.vec3(p_2[0] * mu * p_2[1] / fm, p_2[1], p_2[2] * mu * p_2[1] / fm)
+
+    #     # CONTACT 3
+    #     # calculate sum(G_ij*p_j) and sum over det(G_ij)
+    #     sum = wp.vec3(0.0, 0.0, 0.0)
+    #     r_sum = 0.0
+
+    #     sum += G_mat[tid, 3, 0] * p_0
+    #     r_sum += wp.determinant(G_mat[tid, 3, 0])
+    #     sum += G_mat[tid, 3, 1] * p_1
+    #     r_sum += wp.determinant(G_mat[tid, 3, 1])
+    #     sum += G_mat[tid, 3, 2] * p_2
+    #     r_sum += wp.determinant(G_mat[tid, 3, 2])
+    #     sum += G_mat[tid, 3, 3] * p_3
+    #     r_sum += wp.determinant(G_mat[tid, 3, 3])
+
+    #     r = 1.0 / (1.0 + r_sum)  # +1 for stability
+
+    #     # update percussion
+    #     p_3 = p_3 - r * (sum + c_vec_3)
+
+    #     # projection to friction cone
+    #     if p_3[1] <= 0.0:
+    #         p_3 = wp.vec3(0.0, 0.0, 0.0)
+    #     elif p_3[0] != 0.0 or p_3[2] != 0.0:
+    #         fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
+    #         if mu * p_3[1] < fm:
+    #             p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
+    
+    p_0, p_1, p_2, p_3 = prox_loop(tid, G_mat, c_vec_0, c_vec_1, c_vec_2, c_vec_3, mu, prox_iter, p_0, p_1, p_2, p_3)
 
     percussion[tid, 0] = p_0
     percussion[tid, 1] = p_1
@@ -1408,132 +1528,23 @@ def prox_iteration_unrolled_soft(
     c_1 = wp.dot(n, point_1)
     c_2 = wp.dot(n, point_2)
     c_3 = wp.dot(n, point_3)
+    c_vec_0 = c_vec[tid, 0] * offset_sigmoid(c_0, scale, 2.2)
+    c_vec_1 = c_vec[tid, 1] * offset_sigmoid(c_1, scale, 2.2)
+    c_vec_2 = c_vec[tid, 2] * offset_sigmoid(c_2, scale, 2.2)
+    c_vec_3 = c_vec[tid, 3] * offset_sigmoid(c_3, scale, 2.2)
 
     # initialize percussions with steady state
-    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec[tid, 0]
-    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec[tid, 1]
-    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec[tid, 2]
-    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec[tid, 3]
-    # overwrite percussions with steady state only in normal direction
-    # p_0 = wp.vec3(0.0, p_0[1], 0.0)
-    # p_1 = wp.vec3(0.0, p_1[1], 0.0)
-    # p_2 = wp.vec3(0.0, p_2[1], 0.0)
-    # p_3 = wp.vec3(0.0, p_3[1], 0.0)
+    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec_0
+    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec_1
+    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec_2
+    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec_3
 
-    # # solve percussions iteratively
-    for it in range(prox_iter):
-        # CONTACT 0
-        # calculate sum(G_ij*p_j) and sum over det(G_ij)
-        sum = wp.vec3(0.0, 0.0, 0.0)
-        r_sum = 0.0
+    p_0, p_1, p_2, p_3 = prox_loop(tid, G_mat, c_vec_0, c_vec_1, c_vec_2, c_vec_3, mu, prox_iter, p_0, p_1, p_2, p_3)
 
-        sum += G_mat[tid, 0, 0] * p_0
-        r_sum += wp.determinant(G_mat[tid, 0, 0])
-        sum += G_mat[tid, 0, 1] * p_1 * offset_sigmoid(c_1, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 0, 1])
-        sum += G_mat[tid, 0, 2] * p_2 * offset_sigmoid(c_2, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 0, 2])
-        sum += G_mat[tid, 0, 3] * p_3 * offset_sigmoid(c_3, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 0, 3])
-
-        r = 1.0 / (1.0 + r_sum)  # +1 for stability
-
-        # update percussion
-        p_0 = p_0 - r * (sum + c_vec[tid, 0])
-
-        # projection to friction cone
-        if p_0[1] <= 0.0:
-            p_0 = wp.vec3(0.0, 0.0, 0.0)
-        elif p_0[0] != 0.0 or p_0[2] != 0.0:
-            fm = wp.sqrt(p_0[0] ** 2.0 + p_0[2] ** 2.0)  # friction magnitude
-            if mu * p_0[1] < fm:
-                p_0 = wp.vec3(p_0[0] * mu * p_0[1] / fm, p_0[1], p_0[2] * mu * p_0[1] / fm)
-
-        # CONTACT 1
-        # calculate sum(G_ij*p_j) and sum over det(G_ij)
-        sum = wp.vec3(0.0, 0.0, 0.0)
-        r_sum = 0.0
-
-        sum += G_mat[tid, 1, 0] * p_0 * offset_sigmoid(c_0, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 1, 0])
-        sum += G_mat[tid, 1, 1] * p_1
-        r_sum += wp.determinant(G_mat[tid, 1, 1])
-        sum += G_mat[tid, 1, 2] * p_2 * offset_sigmoid(c_2, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 1, 2])
-        sum += G_mat[tid, 1, 3] * p_3 * offset_sigmoid(c_3, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 1, 3])
-
-        r = 1.0 / (1.0 + r_sum)  # +1 for stability
-
-        # update percussion
-        p_1 = p_1 - r * (sum + c_vec[tid, 1])
-
-        # projection to friction cone
-        if p_1[1] <= 0.0:
-            p_1 = wp.vec3(0.0, 0.0, 0.0)
-        elif p_1[0] != 0.0 or p_1[2] != 0.0:
-            fm = wp.sqrt(p_1[0] ** 2.0 + p_1[2] ** 2.0)  # friction magnitude
-            if mu * p_1[1] < fm:
-                p_1 = wp.vec3(p_1[0] * mu * p_1[1] / fm, p_1[1], p_1[2] * mu * p_1[1] / fm)
-
-        # CONTACT 2
-        # calculate sum(G_ij*p_j) and sum over det(G_ij)
-        sum = wp.vec3(0.0, 0.0, 0.0)
-        r_sum = 0.0
-
-        sum += G_mat[tid, 2, 0] * p_0 * offset_sigmoid(c_0, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 2, 0])
-        sum += G_mat[tid, 2, 1] * p_1 * offset_sigmoid(c_1, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 2, 1])
-        sum += G_mat[tid, 2, 2] * p_2
-        r_sum += wp.determinant(G_mat[tid, 2, 2])
-        sum += G_mat[tid, 2, 3] * p_3 * offset_sigmoid(c_3, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 2, 3])
-
-        r = 1.0 / (1.0 + r_sum)  # +1 for stability
-
-        # update percussion
-        p_2 = p_2 - r * (sum + c_vec[tid, 2])
-
-        # projection to friction cone
-        if p_2[1] <= 0.0:
-            p_2 = wp.vec3(0.0, 0.0, 0.0)
-        elif p_2[0] != 0.0 or p_2[2] != 0.0:
-            fm = wp.sqrt(p_2[0] ** 2.0 + p_2[2] ** 2.0)  # friction magnitude
-            if mu * p_2[1] < fm:
-                p_2 = wp.vec3(p_2[0] * mu * p_2[1] / fm, p_2[1], p_2[2] * mu * p_2[1] / fm)
-
-        # CONTACT 3
-        # calculate sum(G_ij*p_j) and sum over det(G_ij)
-        sum = wp.vec3(0.0, 0.0, 0.0)
-        r_sum = 0.0
-
-        sum += G_mat[tid, 3, 0] * p_0 * offset_sigmoid(c_0, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 3, 0])
-        sum += G_mat[tid, 3, 1] * p_1 * offset_sigmoid(c_1, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 3, 1])
-        sum += G_mat[tid, 3, 2] * p_2 * offset_sigmoid(c_2, scale, 2.2)
-        r_sum += wp.determinant(G_mat[tid, 3, 2])
-        sum += G_mat[tid, 3, 3] * p_3
-        r_sum += wp.determinant(G_mat[tid, 3, 3])
-
-        r = 1.0 / (1.0 + r_sum)  # +1 for stability
-
-        # update percussion
-        p_3 = p_3 - r * (sum + c_vec[tid, 3])
-
-        # projection to friction cone
-        if p_3[1] <= 0.0:
-            p_3 = wp.vec3(0.0, 0.0, 0.0)
-        elif p_3[0] != 0.0 or p_3[2] != 0.0:
-            fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
-            if mu * p_3[1] < fm:
-                p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
-
-    percussion[tid, 0] = p_0 * offset_sigmoid(c_0, scale, 2.2)
-    percussion[tid, 1] = p_1 * offset_sigmoid(c_1, scale, 2.2)
-    percussion[tid, 2] = p_2 * offset_sigmoid(c_2, scale, 2.2)
-    percussion[tid, 3] = p_3 * offset_sigmoid(c_3, scale, 2.2)
+    percussion[tid, 0] = p_0 # * offset_sigmoid(c_0, scale, 2.2)
+    percussion[tid, 1] = p_1 # * offset_sigmoid(c_1, scale, 2.2)
+    percussion[tid, 2] = p_2 # * offset_sigmoid(c_2, scale, 2.2)
+    percussion[tid, 3] = p_3 # * offset_sigmoid(c_3, scale, 2.2)
 
 
 @wp.kernel
@@ -2038,6 +2049,7 @@ class MoreauIntegrator:
                 model.rigid_contact_point0,
                 model.rigid_contact_shape0,
                 model.shape_geo,
+                model.col_height,
             ],
             outputs=[model.Jc, model.c_body_vec, state_mid.point_vec],
             device=model.device,
