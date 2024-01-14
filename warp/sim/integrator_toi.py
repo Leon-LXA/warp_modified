@@ -1242,28 +1242,21 @@ def prox_iteration(
                     )
 
 
-@wp.kernel
-def prox_iteration_unrolled(
+@wp.func
+def prox_loop(
+    tid: int,
     G_mat: wp.array3d(dtype=wp.mat33),
-    c_vec: wp.array2d(dtype=wp.vec3),
+    c_vec_0: wp.vec3,
+    c_vec_1: wp.vec3,
+    c_vec_2: wp.vec3,
+    c_vec_3: wp.vec3,
     mu: float,
     prox_iter: int,
-    percussion: wp.array2d(dtype=wp.vec3),
+    p_0: wp.vec3,
+    p_1: wp.vec3,
+    p_2: wp.vec3,
+    p_3: wp.vec3,
 ):
-    tid = wp.tid()
-
-    # initialize percussions with steady state
-    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec[tid, 0]
-    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec[tid, 1]
-    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec[tid, 2]
-    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec[tid, 3]
-    # overwrite percussions with steady state only in normal direction
-    # p_0 = wp.vec3(0.0, p_0[1], 0.0)
-    # p_1 = wp.vec3(0.0, p_1[1], 0.0)
-    # p_2 = wp.vec3(0.0, p_2[1], 0.0)
-    # p_3 = wp.vec3(0.0, p_3[1], 0.0)
-
-    # # solve percussions iteratively
     for it in range(prox_iter):
         # CONTACT 0
         # calculate sum(G_ij*p_j) and sum over det(G_ij)
@@ -1282,7 +1275,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_0 = p_0 - r * (sum + c_vec[tid, 0])
+        p_0 = p_0 - r * (sum + c_vec_0)
 
         # projection to friction cone
         if p_0[1] <= 0.0:
@@ -1309,7 +1302,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_1 = p_1 - r * (sum + c_vec[tid, 1])
+        p_1 = p_1 - r * (sum + c_vec_1)
 
         # projection to friction cone
         if p_1[1] <= 0.0:
@@ -1336,7 +1329,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_2 = p_2 - r * (sum + c_vec[tid, 2])
+        p_2 = p_2 - r * (sum + c_vec_2)
 
         # projection to friction cone
         if p_2[1] <= 0.0:
@@ -1363,7 +1356,7 @@ def prox_iteration_unrolled(
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
 
         # update percussion
-        p_3 = p_3 - r * (sum + c_vec[tid, 3])
+        p_3 = p_3 - r * (sum + c_vec_3)
 
         # projection to friction cone
         if p_3[1] <= 0.0:
@@ -1372,6 +1365,32 @@ def prox_iteration_unrolled(
             fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
             if mu * p_3[1] < fm:
                 p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
+
+    return p_0, p_1, p_2, p_3
+
+
+@wp.kernel
+def prox_iteration_unrolled(
+    G_mat: wp.array3d(dtype=wp.mat33),
+    c_vec: wp.array2d(dtype=wp.vec3),
+    mu: float,
+    prox_iter: int,
+    percussion: wp.array2d(dtype=wp.vec3),
+):
+    tid = wp.tid()
+
+    c_vec_0 = c_vec[tid, 0]
+    c_vec_1 = c_vec[tid, 1]
+    c_vec_2 = c_vec[tid, 2]
+    c_vec_3 = c_vec[tid, 3]
+
+    # initialize percussions with steady state
+    p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec_0
+    p_1 = -wp.inverse(G_mat[tid, 1, 1]) * c_vec_1
+    p_2 = -wp.inverse(G_mat[tid, 2, 2]) * c_vec_2
+    p_3 = -wp.inverse(G_mat[tid, 3, 3]) * c_vec_3
+
+    p_0, p_1, p_2, p_3 = prox_loop(tid, G_mat, c_vec_0, c_vec_1, c_vec_2, c_vec_3, mu, prox_iter, p_0, p_1, p_2, p_3)
 
     percussion[tid, 0] = p_0
     percussion[tid, 1] = p_1
@@ -1839,7 +1858,7 @@ class TOIIntegrator:
             outputs=[state_mid.point_vec],
             device=model.device,
         )
-        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter, sigmoid_scale, beta, mode)
+        self.eval_contact_forces(model, state_mid, dt, mu, prox_iter, beta, mode)
 
         # recompute tau with contact forces
         self.eval_tau(model, state_mid, state_out, max_torque)
