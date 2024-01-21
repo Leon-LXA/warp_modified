@@ -18,7 +18,7 @@ from .model import ModelShapeGeometry, ModelShapeMaterials
 @wp.func
 def offset_sigmoid(x: float, scale: float, offset: float):
     return (
-        1.0 / (1.0 + wp.exp(wp.clamp(x * scale - offset, -100.0, 50.0))) / 0.9
+        1.0 / (1.0 + wp.exp(wp.clamp(x * scale - offset, -100.0, 50.0))) #/ 0.9
     )  # clamp for stability (exp gradients) unstable from around 85
 
 
@@ -1198,7 +1198,7 @@ def prox_wo_iteration(
 
     if p_3[1] <= 0.0:
         p_3 = wp.vec3(0.0, 0.0, 0.0)
-    elif p_3[0] != 0.0 or p_3[2] != 0.0:
+    elif p_3[0] != 0.0 or p_3[2] != 0.0:2.2
         fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
         if mu * p_3[1] < fm:
             p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
@@ -1305,7 +1305,7 @@ def prox_loop(
         sum += G_mat[tid, 1, 1] * p_1
         r_sum += wp.determinant(G_mat[tid, 1, 1])
         sum += G_mat[tid, 1, 2] * p_2
-        r_sum += wp.determinant(G_mat[tid, 1, 2])
+        r_sum += wp.determinant(G_mat[tid, 1, 2])2.2
         sum += G_mat[tid, 1, 3] * p_3
         r_sum += wp.determinant(G_mat[tid, 1, 3])
 
@@ -1379,7 +1379,7 @@ def prox_loop(
     return p_0, p_1, p_2, p_3
 
 
-@wp.func
+@wp.func2.2
 def prox_loop_soft(
     tid: int,
     G_mat: wp.array3d(dtype=wp.mat33),
@@ -1408,11 +1408,11 @@ def prox_loop_soft(
 
         sum += G_mat[tid, 0, 0] * p_0
         r_sum += wp.determinant(G_mat[tid, 0, 0])
-        sum += G_mat[tid, 0, 1] * p_1 * offset_sigmoid(c_1, scale, 2.2)
+        sum += G_mat[tid, 0, 1] * p_1 * offset_sigmoid(c_1, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 0, 1])
-        sum += G_mat[tid, 0, 2] * p_2 * offset_sigmoid(c_2, scale, 2.2)
+        sum += G_mat[tid, 0, 2] * p_2 * offset_sigmoid(c_2, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 0, 2])
-        sum += G_mat[tid, 0, 3] * p_3 * offset_sigmoid(c_3, scale, 2.2)
+        sum += G_mat[tid, 0, 3] * p_3 * offset_sigmoid(c_3, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 0, 3])
 
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
@@ -1433,13 +1433,13 @@ def prox_loop_soft(
         sum = wp.vec3(0.0, 0.0, 0.0)
         r_sum = 0.0
 
-        sum += G_mat[tid, 1, 0] * p_0 * offset_sigmoid(c_0, scale, 2.2)
+        sum += G_mat[tid, 1, 0] * p_0 * offset_sigmoid(c_0, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 1, 0])
         sum += G_mat[tid, 1, 1] * p_1
         r_sum += wp.determinant(G_mat[tid, 1, 1])
-        sum += G_mat[tid, 1, 2] * p_2 * offset_sigmoid(c_2, scale, 2.2)
+        sum += G_mat[tid, 1, 2] * p_2 * offset_sigmoid(c_2, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 1, 2])
-        sum += G_mat[tid, 1, 3] * p_3 * offset_sigmoid(c_3, scale, 2.2)
+        sum += G_mat[tid, 1, 3] * p_3 * offset_sigmoid(c_3, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 1, 3])
 
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
@@ -1460,13 +1460,13 @@ def prox_loop_soft(
         sum = wp.vec3(0.0, 0.0, 0.0)
         r_sum = 0.0
 
-        sum += G_mat[tid, 2, 0] * p_0 * offset_sigmoid(c_0, scale, 2.2)
+        sum += G_mat[tid, 2, 0] * p_0 * offset_sigmoid(c_0, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 2, 0])
-        sum += G_mat[tid, 2, 1] * p_1 * offset_sigmoid(c_1, scale, 2.2)
+        sum += G_mat[tid, 2, 1] * p_1 * offset_sigmoid(c_1, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 2, 1])
         sum += G_mat[tid, 2, 2] * p_2
         r_sum += wp.determinant(G_mat[tid, 2, 2])
-        sum += G_mat[tid, 2, 3] * p_3 * offset_sigmoid(c_3, scale, 2.2)
+        sum += G_mat[tid, 2, 3] * p_3 * offset_sigmoid(c_3, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 2, 3])
 
         r = 1.0 / (1.0 + r_sum)  # +1 for stability
@@ -1487,11 +1487,11 @@ def prox_loop_soft(
         sum = wp.vec3(0.0, 0.0, 0.0)
         r_sum = 0.0
 
-        sum += G_mat[tid, 3, 0] * p_0 * offset_sigmoid(c_0, scale, 2.2)
+        sum += G_mat[tid, 3, 0] * p_0 * offset_sigmoid(c_0, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 3, 0])
-        sum += G_mat[tid, 3, 1] * p_1 * offset_sigmoid(c_1, scale, 2.2)
+        sum += G_mat[tid, 3, 1] * p_1 * offset_sigmoid(c_1, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 3, 1])
-        sum += G_mat[tid, 3, 2] * p_2 * offset_sigmoid(c_2, scale, 2.2)
+        sum += G_mat[tid, 3, 2] * p_2 * offset_sigmoid(c_2, scale, 0.0)
         r_sum += wp.determinant(G_mat[tid, 3, 2])
         sum += G_mat[tid, 3, 3] * p_3
         r_sum += wp.determinant(G_mat[tid, 3, 3])
@@ -1678,10 +1678,10 @@ def prox_iteration_unrolled_soft(
     c_1 = wp.dot(n, point_1)
     c_2 = wp.dot(n, point_2)
     c_3 = wp.dot(n, point_3)
-    c_vec_0 = c_vec[tid, 0]  # * offset_sigmoid(c_0, scale, 2.2)
-    c_vec_1 = c_vec[tid, 1]  # * offset_sigmoid(c_1, scale, 2.2)
-    c_vec_2 = c_vec[tid, 2]  # * offset_sigmoid(c_2, scale, 2.2)
-    c_vec_3 = c_vec[tid, 3]  # * offset_sigmoid(c_3, scale, 2.2)
+    c_vec_0 = c_vec[tid, 0]  # * offset_sigmoid(c_0, scale, 0.0)
+    c_vec_1 = c_vec[tid, 1]  # * offset_sigmoid(c_1, scale, 0.0)
+    c_vec_2 = c_vec[tid, 2]  # * offset_sigmoid(c_2, scale, 0.0)
+    c_vec_3 = c_vec[tid, 3]  # * offset_sigmoid(c_3, scale, 0.0)
 
     # initialize percussions with steady state
     p_0 = -wp.inverse(G_mat[tid, 0, 0]) * c_vec_0
@@ -1693,10 +1693,10 @@ def prox_iteration_unrolled_soft(
         tid, G_mat, c_vec_0, c_vec_1, c_vec_2, c_vec_3, c_0, c_1, c_2, c_3, scale, mu, prox_iter, p_0, p_1, p_2, p_3
     )
 
-    percussion[tid, 0] = p_0 * offset_sigmoid(c_0, scale, 2.2)
-    percussion[tid, 1] = p_1 * offset_sigmoid(c_1, scale, 2.2)
-    percussion[tid, 2] = p_2 * offset_sigmoid(c_2, scale, 2.2)
-    percussion[tid, 3] = p_3 * offset_sigmoid(c_3, scale, 2.2)
+    percussion[tid, 0] = p_0 * offset_sigmoid(c_0, scale, 0.0)
+    percussion[tid, 1] = p_1 * offset_sigmoid(c_1, scale, 0.0)
+    percussion[tid, 2] = p_2 * offset_sigmoid(c_2, scale, 0.0)
+    percussion[tid, 3] = p_3 * offset_sigmoid(c_3, scale, 0.0)
 
 
 @wp.kernel
