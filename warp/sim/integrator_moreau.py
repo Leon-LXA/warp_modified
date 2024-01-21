@@ -1198,7 +1198,7 @@ def prox_wo_iteration(
 
     if p_3[1] <= 0.0:
         p_3 = wp.vec3(0.0, 0.0, 0.0)
-    elif p_3[0] != 0.0 or p_3[2] != 0.0:2.2
+    elif p_3[0] != 0.0 or p_3[2] != 0.0:
         fm = wp.sqrt(p_3[0] ** 2.0 + p_3[2] ** 2.0)  # friction magnitude
         if mu * p_3[1] < fm:
             p_3 = wp.vec3(p_3[0] * mu * p_3[1] / fm, p_3[1], p_3[2] * mu * p_3[1] / fm)
@@ -1305,7 +1305,7 @@ def prox_loop(
         sum += G_mat[tid, 1, 1] * p_1
         r_sum += wp.determinant(G_mat[tid, 1, 1])
         sum += G_mat[tid, 1, 2] * p_2
-        r_sum += wp.determinant(G_mat[tid, 1, 2])2.2
+        r_sum += wp.determinant(G_mat[tid, 1, 2])
         sum += G_mat[tid, 1, 3] * p_3
         r_sum += wp.determinant(G_mat[tid, 1, 3])
 
@@ -1379,7 +1379,7 @@ def prox_loop(
     return p_0, p_1, p_2, p_3
 
 
-@wp.func2.2
+@wp.func
 def prox_loop_soft(
     tid: int,
     G_mat: wp.array3d(dtype=wp.mat33),
