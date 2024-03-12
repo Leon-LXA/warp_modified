@@ -45,7 +45,8 @@ class Example:
         self.num_envs = num_envs
         articulation_builder = wp.sim.ModelBuilder()
         wp.sim.parse_urdf(
-            os.path.join(os.path.dirname(__file__), "assets/quadruped.urdf"),
+            # os.path.join(os.path.dirname(__file__), "assets/quadruped.urdf"),
+            os.path.join(os.path.dirname(__file__), "assets/anymal_b/urdf/anymal.urdf"),
             articulation_builder,
             xform=wp.transform([0.0, 0.7, 0.0], wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi * 0.5)),
             floating=True,
@@ -59,6 +60,7 @@ class Example:
             shape_mu=0.0,
             limit_ke=1.0e4,
             limit_kd=1.0e1,
+            enable_self_collisions=False
         )
 
         builder = wp.sim.ModelBuilder()
@@ -66,9 +68,9 @@ class Example:
         for i in range(num_envs):
             builder.add_builder(articulation_builder, xform=wp.transform(offsets[i], wp.quat_identity()))
 
-            builder.joint_q[-12:] = [0.2, 0.4, -0.6, -0.2, -0.4, 0.6, -0.2, 0.4, -0.6, 0.2, -0.4, 0.6]
+            builder.joint_q[-12:] = [0.0, 0.4, -0.8, 0.0, 0.4, -0.8, -0.0, -0.4, 0.8, 0.0, -0.4, 0.8]
 
-            builder.joint_target[-12:] = [0.2, 0.4, -0.6, -0.2, -0.4, 0.6, -0.2, 0.4, -0.6, 0.2, -0.4, 0.6]
+            builder.joint_target[-12:] = [0.0, 0.4, -0.8, 0.0, 0.4, -0.8, -0.0, -0.4, 0.8, 0.0, -0.4, 0.8]
 
         np.set_printoptions(suppress=True)
         # finalize model
@@ -77,6 +79,7 @@ class Example:
 
         self.model.joint_attach_ke = 16000.0
         self.model.joint_attach_kd = 200.0
+        self.model.joint_target_ke = wp.array([16000.0, 16000.0, 16000.0, 16000.0, 16000.0, 16000.0, 16000.0, 16000.0, 16000.0, 16000.0, 16000.0, 16000.0], dtype=wp.types.float32)
 
         self.integrator = wp.sim.XPBDIntegrator()
 
@@ -175,5 +178,5 @@ if profile:
 
 else:
     stage = os.path.join(os.path.dirname(__file__), "outputs/example_sim_quadruped.usd")
-    robot = Example(stage, render=True, num_envs=25)
+    robot = Example(stage, render=True, num_envs=1)
     robot.run()
